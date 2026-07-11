@@ -1,0 +1,1011 @@
+<?php
+declare(strict_types=1);
+
+require_once __DIR__ . '/rsm_db.php';
+
+$area = isset($area) ? (string) $area : 'Regional';
+$areaScope = isset($areaScope) ? (string) $areaScope : 'Semua wilayah';
+$page = strtolower((string) ($_GET['page'] ?? 'dashboard'));
+$role = 'staff';
+$allowedRoleKeys = ['staff'];
+$roleQuery = '';
+
+$roles = [
+    'senior' => ['label' => 'Senior Manager', 'name' => 'Senior Manager', 'scope' => 'Semua wilayah, unit, dan staff'],
+    'koordinator' => ['label' => 'Koordinator Wilayah', 'name' => 'Koordinator Wilayah', 'scope' => 'Wilayah yang menjadi tanggung jawab'],
+    'staff' => ['label' => 'Staff Unit', 'name' => 'Staff Unit', 'scope' => 'Laporan milik sendiri'],
+];
+if (!isset($roles[$role])) {
+    $role = 'senior';
+}
+
+$menus = [
+    'dashboard' => 'Dashboard Utama',
+    'kegiatan' => 'Kegiatan Marketing',
+    'anggaran' => 'Laporan Iklan',
+    'aktivitas' => 'Aktivitas Lain',
+    'rekap' => 'Laporan & Rekap',
+    'role' => 'User & Role',
+    'password' => 'Ganti Password',
+];
+$adminMenus = [
+    'users' => 'Kelola User',
+];
+$pageTitles = $menus + $adminMenus + ['detail' => 'Detail Laporan', 'edit' => 'Edit Laporan'];
+if (!isset($pageTitles[$page])) {
+    $page = 'dashboard';
+}
+
+function h(string $value): string
+{
+    return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+}
+
+function money_idr(float $value): string
+{
+    return 'Rp ' . number_format($value, 0, ',', '.');
+}
+
+function url_for(string $page, string $role): string
+{
+    return '?page=' . rawurlencode($page) . ($GLOBALS['roleQuery'] ?? '');
+}
+
+function badge(string $status): string
+{
+    $key = strtolower(str_replace(' ', '-', $status));
+    return '<span class="badge badge-' . h($key) . '">' . h($status) . '</span>';
+}
+
+function can_action(string $role, string $action): bool
+{
+    $rules = [
+        'senior' => ['detail', 'setujui', 'tolak', 'revisi', 'export'],
+        'koordinator' => ['detail', 'verifikasi', 'revisi', 'export-wilayah'],
+        'staff' => ['detail', 'edit-draft', 'hapus-draft'],
+    ];
+    return in_array($action, $rules[$role] ?? [], true);
+}
+
+function allowed_effective_roles(string $actualRole): array
+{
+    return [
+        'senior' => ['senior', 'koordinator', 'staff'],
+        'koordinator' => ['koordinator', 'staff'],
+        'staff' => ['staff'],
+    ][$actualRole] ?? ['staff'];
+}
+
+$dbError = null;
+$notice = null;
+$summary = [
+    'marketing_count' => 0,
+    'budget_total' => 0,
+    'realization_total' => 0,
+    'other_count' => 0,
+    'pending_count' => 0,
+    'approved_count' => 0,
+];
+$activities = [];
+$ads = [];
+$otherActivities = [];
+$logs = [];
+$detailReport = null;
+$detailLogs = [];
+$detailAdLeads = [];
+$editReport = null;
+$authUser = null;
+$loginError = null;
+$managedUsers = [];
+$references = [
+    'regionals' => [],
+    'staff' => [],
+    'campuses' => [],
+];
+
+try {
+    rsm_ensure_schema();
+    $postAction = (string) ($_POST['action'] ?? '');
+    if (isset($_GET['logout'])) {
+        rsm_logout();
+        header('Location: ./');
+        exit;
+    }
+
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && $postAction === 'login') {
+        if (!rsm_login((string) ($_POST['username'] ?? ''), (string) ($_POST['password'] ?? ''))) {
+            $loginError = 'Username atau password salah.';
+        }
+    }
+
+    $authUser = rsm_auth_user();
+    if (!$authUser) {
+        render_login_page($loginError);
+        exit;
+    }
+
+    $actualRole = (string) $authUser['role'];
+    $allowedRoleKeys = allowed_effective_roles($actualRole);
+    $requestedRole = strtolower((string) ($_GET['role'] ?? $actualRole));
+    $role = in_array($requestedRole, $allowedRoleKeys, true) ? $requestedRole : $actualRole;
+    if (!isset($roles[$role])) {
+        $role = $allowedRoleKeys[0] ?? 'staff';
+    }
+    if (count($allowedRoleKeys) > 1) {
+        $roleQuery = '&role=' . rawurlencode($role);
+    }
+    if (($authUser['role'] ?? '') !== 'senior' && isset($adminMenus[$page])) {
+        $page = 'dashboard';
+    }
+
+    if (!empty($authUser['area']) && (string) $authUser['area'] !== $area) {
+        header('Location: ' . ((string) $authUser['area'] === 'Regional A' ? 'regional-a.php' : 'regional-b.php'));
+        exit;
+    }
+
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && $postAction === 'change_password') {
+        rsm_change_password((int) $authUser['id'], (string) ($_POST['old_password'] ?? ''), (string) ($_POST['new_password'] ?? ''), (string) ($_POST['confirm_password'] ?? ''));
+        $notice = 'Password berhasil diperbarui.';
+        $authUser = rsm_auth_user();
+    } elseif ($postAction !== 'login') {
+        $notice = rsm_handle_post($area, $role);
+    }
+
+    $references = rsm_reference_options($area, $authUser, $role);
+    $summary = rsm_summary($area, $authUser);
+    $activities = rsm_reports($area, 'marketing', 50, $authUser);
+    $ads = rsm_reports($area, 'ads', 50, $authUser);
+    $otherActivities = rsm_reports($area, 'other', 50, $authUser);
+    $logs = rsm_logs($area, 20, $authUser);
+    if ($page === 'users' && ($authUser['role'] ?? '') === 'senior') {
+        $managedUsers = rsm_users($area);
+    }
+    if ($page === 'detail') {
+        $detailReport = rsm_report($area, (int) ($_GET['id'] ?? 0), $authUser);
+        if ($detailReport) {
+            $detailLogs = rsm_report_logs((int) $detailReport['id']);
+            if (($detailReport['report_type'] ?? '') === 'ads') {
+                $detailAdLeads = rsm_report_ad_leads((int) $detailReport['id']);
+            }
+        }
+    } elseif ($page === 'edit') {
+        $editReport = rsm_report($area, (int) ($_GET['id'] ?? 0), $authUser);
+    }
+} catch (Throwable $error) {
+    $dbError = $error->getMessage();
+}
+
+$latestActivities = array_slice($activities, 0, 8);
+
+$summaryCards = [
+    ['label' => 'Kegiatan bulan ini', 'value' => number_format((float) $summary['marketing_count'], 0, ',', '.'), 'tone' => 'blue', 'note' => 'Data dari tabel rsm_reports'],
+    ['label' => 'Anggaran iklan', 'value' => money_idr((float) $summary['budget_total']), 'tone' => 'purple', 'note' => 'Total pengajuan'],
+    ['label' => 'Realisasi anggaran', 'value' => money_idr((float) $summary['realization_total']), 'tone' => 'green', 'note' => 'Pemakaian aktual'],
+    ['label' => 'Aktivitas lain', 'value' => number_format((float) $summary['other_count'], 0, ',', '.'), 'tone' => 'cyan', 'note' => 'Koordinasi dan administrasi'],
+    ['label' => 'Laporan pending', 'value' => number_format((float) $summary['pending_count'], 0, ',', '.'), 'tone' => 'amber', 'note' => 'Menunggu tindak lanjut'],
+    ['label' => 'Disetujui', 'value' => number_format((float) $summary['approved_count'], 0, ',', '.'), 'tone' => 'emerald', 'note' => 'Selesai diverifikasi'],
+];
+?><!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><?= h($pageTitles[$page]) ?> - <?= h($area) ?></title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="./">
+        <span class="brand-mark">RSM</span>
+        <span><strong><?= h($area) ?></strong><small><?= h($areaScope) ?></small></span>
+      </a>
+      <nav class="menu">
+        <?php foreach ($menus as $key => $label): ?>
+          <a class="<?= $page === $key ? 'active' : '' ?>" href="<?= h(url_for($key, $role)) ?>"><?= h($label) ?></a>
+        <?php endforeach; ?>
+        <?php if (($authUser['role'] ?? '') === 'senior'): ?>
+          <?php foreach ($adminMenus as $key => $label): ?>
+            <a class="<?= $page === $key ? 'active' : '' ?>" href="<?= h(url_for($key, $role)) ?>"><?= h($label) ?></a>
+          <?php endforeach; ?>
+        <?php endif; ?>
+      </nav>
+      <div class="role-note">
+        <span>User aktif</span>
+        <strong><?= h((string) ($authUser['name'] ?? $roles[$role]['label'])) ?></strong>
+        <small><?= h((string) ($authUser['jabatan'] ?? $roles[$role]['scope'])) ?></small>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow"><?= h($area) ?></p>
+          <h1><?= h($pageTitles[$page]) ?></h1>
+          <p>Monitoring aktivitas marketing regional, Laporan iklan, dan performa unit/kampus.</p>
+        </div>
+        <div class="top-actions">
+          <?php if (count($allowedRoleKeys) > 1): ?>
+            <form method="get" class="role-form">
+              <input type="hidden" name="page" value="<?= h($page) ?>">
+              <?php if (isset($_GET['id'])): ?><input type="hidden" name="id" value="<?= h((string) $_GET['id']) ?>"><?php endif; ?>
+              <label>
+                <span>Tampilan sebagai</span>
+                <select name="role" onchange="this.form.submit()">
+                  <?php foreach ($allowedRoleKeys as $key): ?>
+                    <option value="<?= h($key) ?>" <?= $role === $key ? 'selected' : '' ?>><?= h($roles[$key]['label']) ?></option>
+                  <?php endforeach; ?>
+                </select>
+              </label>
+            </form>
+          <?php endif; ?>
+          <div class="user-pill">
+            <strong><?= h((string) ($authUser['name'] ?? '-')) ?></strong>
+            <span><?= h((string) ($authUser['username'] ?? '-')) ?> - <?= h((string) ($authUser['jabatan'] ?? $roles[$role]['label'])) ?></span>
+          </div>
+          <button class="icon-btn" type="button">Notifikasi</button>
+          <a class="logout" href="?logout=1">Keluar</a>
+        </div>
+      </header>
+
+      <?php if ($notice): ?>
+        <div class="alert alert-success"><?= h($notice) ?></div>
+      <?php endif; ?>
+      <?php if ($dbError): ?>
+        <div class="alert alert-danger">Database RSM belum tersambung: <?= h($dbError) ?></div>
+      <?php endif; ?>
+
+      <?php if ($page === 'dashboard'): ?>
+        <section class="summary-grid">
+          <?php foreach ($summaryCards as $card): ?>
+            <article class="summary-card tone-<?= h($card['tone']) ?>">
+              <span><?= h($card['label']) ?></span>
+              <strong><?= h($card['value']) ?></strong>
+              <small><?= h($card['note']) ?></small>
+            </article>
+          <?php endforeach; ?>
+        </section>
+
+        <section class="filter-bar">
+          <input type="date" value="2026-06-30">
+          <?php if (($authUser['role'] ?? '') === 'staff'): ?>
+            <input class="locked-input" value="<?= h(staff_identity_value('Wilayah', $authUser, $references)) ?>" readonly title="Otomatis sesuai akun login">
+            <input class="locked-input" value="<?= h(staff_identity_value('Unit/Kampus', $authUser, $references)) ?>" readonly title="Otomatis sesuai akun login">
+            <input class="locked-input" value="<?= h(staff_identity_value('Nama staff', $authUser, $references)) ?>" readonly title="Otomatis sesuai akun login">
+          <?php else: ?>
+            <select><option>Semua Wilayah</option><?php foreach ($references['regionals'] as $regionalOption): ?><option><?= h((string) $regionalOption) ?></option><?php endforeach; ?></select>
+            <select><option>Semua Unit/Kampus</option><?php foreach ($references['campuses'] as $campusOption): ?><option><?= h((string) $campusOption['label']) ?></option><?php endforeach; ?></select>
+            <select><option>Semua Staff</option><?php foreach ($references['staff'] as $staffOption): ?><option><?= h((string) $staffOption['name']) ?></option><?php endforeach; ?></select>
+          <?php endif; ?>
+          <select><option>Semua Status</option><option>Draft</option><option>Dikirim</option><option>Diverifikasi</option><option>Disetujui</option><option>Revisi</option></select>
+        </section>
+
+        <section class="chart-grid">
+          <article class="panel"><div class="panel-head"><h2>Kegiatan per Wilayah</h2><span>Bulan ini</span></div><div class="bar-chart"><i style="height:75%"></i><i style="height:58%"></i><i style="height:86%"></i><i style="height:44%"></i><i style="height:64%"></i></div></article>
+          <article class="panel"><div class="panel-head"><h2>Anggaran Iklan</h2><span>Budget vs realisasi</span></div><div class="budget-chart"><span style="width:82%"></span><span style="width:69%"></span><span style="width:54%"></span><span style="width:73%"></span></div></article>
+          <article class="panel"><div class="panel-head"><h2>Aktivitas Staff/Unit</h2><span>Top kontribusi</span></div><div class="donut"></div></article>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><h2>Aktivitas Terbaru</h2><a href="<?= h(url_for('kegiatan', $role)) ?>">Lihat semua</a></div>
+          <?php render_activity_table($latestActivities, $role); ?>
+        </section>
+      <?php elseif ($page === 'kegiatan'): ?>
+        <?php render_form_panel('Tambah Kegiatan Marketing', [
+            'Tanggal kegiatan', 'Wilayah', 'Unit/Kampus', 'Nama staff', 'Jenis kegiatan', 'Nama kegiatan',
+            'Lokasi kegiatan', 'Target kegiatan', 'Hasil kegiatan', 'Jumlah prospek/leads', 'Catatan', 'Upload dokumentasi/foto'
+        ], ['Follow up leads', 'Kunjungan sekolah', 'Kunjungan instansi', 'Sebar brosur', 'Pasang spanduk', 'Event kampus', 'Presentasi PMB', 'Aktivitas digital', 'Lainnya'], ['Draft', 'Dikirim', 'Diverifikasi Koordinator', 'Disetujui Senior Manager', 'Revisi'], 'create_marketing', $references, $authUser); ?>
+        <section class="panel">
+          <div class="panel-head"><h2>Daftar Kegiatan Marketing</h2><button class="primary-btn">Tambah Kegiatan</button></div>
+          <div class="filter-bar compact">
+            <input placeholder="Cari kegiatan">
+            <select><option>Status laporan</option></select>
+            <?php if (($authUser['role'] ?? '') === 'staff'): ?>
+              <input class="locked-input" value="<?= h(staff_identity_value('Wilayah', $authUser, $references)) ?>" readonly title="Otomatis sesuai akun login">
+              <input class="locked-input" value="<?= h(staff_identity_value('Nama staff', $authUser, $references)) ?>" readonly title="Otomatis sesuai akun login">
+            <?php else: ?>
+              <select><option>Wilayah</option></select>
+              <select><option>Staff</option></select>
+            <?php endif; ?>
+          </div>
+          <?php render_activity_table($activities, $role); ?>
+        </section>
+      <?php elseif ($page === 'anggaran'): ?>
+        <section class="summary-grid four">
+          <article class="summary-card tone-purple"><span>Total anggaran</span><strong><?= h(money_idr((float) $summary['budget_total'])) ?></strong><small>Pengajuan bulan ini</small></article>
+          <article class="summary-card tone-green"><span>Total realisasi</span><strong><?= h(money_idr((float) $summary['realization_total'])) ?></strong><small>Pemakaian aktual</small></article>
+          <article class="summary-card tone-amber"><span>Sisa anggaran</span><strong><?= h(money_idr((float) $summary['budget_total'] - (float) $summary['realization_total'])) ?></strong><small>Belum digunakan</small></article>
+          <article class="summary-card tone-blue"><span>Leads iklan</span><strong><?= h((string) array_sum(array_map(static fn (array $row): int => (int) ($row['leads_count'] ?? 0), $ads))) ?></strong><small>Semua platform</small></article>
+        </section>
+        <?php render_form_panel('Input Anggaran Iklan', [
+            'Tanggal', 'Wilayah', 'Unit/Kampus', 'Platform iklan', 'Nama campaign', 'Tujuan iklan',
+            'Anggaran diajukan', 'Anggaran disetujui', 'Realisasi pemakaian',
+            'CPL / Cost per Lead', 'Link campaign', 'Upload bukti invoice/screenshot', 'Upload data hasil iklan (.xls/.xlsx)', 'Catatan performa iklan'
+        ], ['Meta Ads', 'Google Ads', 'TikTok Ads', 'WhatsApp Blast', 'Marketplace/Portal', 'Lainnya'], ['Pengajuan', 'Disetujui', 'Ditolak', 'Berjalan', 'Selesai', 'Revisi'], 'create_ads', $references, $authUser); ?>
+        <section class="panel">
+          <div class="panel-head"><h2>Laporan Anggaran</h2><button class="primary-btn">Tambah Anggaran</button></div>
+          <?php render_ads_table($ads, $role); ?>
+        </section>
+      <?php elseif ($page === 'aktivitas'): ?>
+        <?php render_form_panel('Input Aktivitas Lain', [
+            'Tanggal', 'Wilayah', 'Unit/Kampus', 'Nama staff', 'Kategori aktivitas', 'Deskripsi aktivitas',
+            'Hasil aktivitas', 'Kendala', 'Tindak lanjut', 'Upload dokumentasi'
+        ], ['Meeting internal', 'Briefing', 'Training', 'Koordinasi kampus', 'Koordinasi mitra', 'Pelayanan calon mahasiswa', 'Administrasi PMB', 'Follow up pembayaran', 'Herregistrasi', 'Lainnya'], ['Draft', 'Dikirim', 'Diverifikasi', 'Disetujui', 'Revisi'], 'create_other', $references, $authUser); ?>
+        <section class="panel">
+          <div class="panel-head"><h2>Daftar Aktivitas Lain</h2><button class="primary-btn">Tambah Aktivitas</button></div>
+          <?php render_other_table($otherActivities, $role); ?>
+        </section>
+      <?php elseif ($page === 'rekap'): ?>
+        <section class="panel">
+          <div class="panel-head"><h2>Laporan & Rekap</h2><div class="actions"><button class="secondary-btn">Export Excel</button><button class="secondary-btn">Export PDF</button></div></div>
+          <div class="filter-bar"><select><option>Bulanan</option><option>Harian</option><option>Mingguan</option><option>Custom date</option></select><input type="date"><input type="date"><select><option>Semua laporan</option></select></div>
+          <div class="report-grid">
+            <?php foreach (['Rekap kegiatan marketing', 'Rekap anggaran iklan', 'Rekap aktivitas lain', 'Rekap performa staff', 'Rekap performa wilayah', 'Rekap performa unit/kampus'] as $item): ?>
+              <article class="report-card"><strong><?= h($item) ?></strong><span>Siap difilter dan diekspor</span></article>
+            <?php endforeach; ?>
+          </div>
+        </section>
+      <?php elseif ($page === 'detail'): ?>
+        <?php if (!$detailReport): ?>
+          <section class="panel">
+            <div class="panel-head"><h2>Laporan tidak ditemukan</h2><span>Data tidak tersedia di area ini</span></div>
+            <p class="muted">Pastikan laporan yang dibuka berasal dari <?= h($area) ?>.</p>
+            <a class="secondary-btn" href="<?= h(url_for('dashboard', $role)) ?>">Kembali ke Dashboard</a>
+          </section>
+        <?php else: ?>
+          <section class="panel detail-panel">
+            <div class="panel-head">
+              <div>
+                <h2><?= h((string) $detailReport['title']) ?></h2>
+                <span><?= h((string) $detailReport['report_type']) ?> - <?= h((string) $detailReport['report_date']) ?></span>
+              </div>
+              <div class="actions">
+                <?= badge((string) $detailReport['status']) ?>
+                <a class="secondary-btn" href="<?= h(url_for(report_page_for((string) $detailReport['report_type']), $role)) ?>">Kembali</a>
+              </div>
+            </div>
+
+            <div class="detail-grid">
+              <?php foreach (detail_fields($detailReport) as $label => $value): ?>
+                <div class="detail-item">
+                  <span><?= h($label) ?></span>
+                  <strong><?= h($value !== '' ? $value : '-') ?></strong>
+                </div>
+              <?php endforeach; ?>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head"><h2>Catatan & Revisi</h2><span>Informasi tindak lanjut</span></div>
+            <div class="detail-note">
+              <strong>Catatan laporan</strong>
+              <p><?= h((string) ($detailReport['notes'] ?: '-')) ?></p>
+            </div>
+            <div class="detail-note">
+              <strong>Catatan revisi</strong>
+              <p><?= h((string) ($detailReport['revision_note'] ?: '-')) ?></p>
+            </div>
+          </section>
+
+          <?php if (($detailReport['report_type'] ?? '') === 'ads'): ?>
+            <section class="panel">
+              <div class="panel-head">
+                <div><h2>Data Hasil Iklan</h2><span>Isi dari file XLS yang diupload pada laporan iklan</span></div>
+                <a class="secondary-btn" href="download-ad-lead-template.php">Download Template .xlsx</a>
+              </div>
+              <form class="inline-upload" method="post" enctype="multipart/form-data">
+                <input type="hidden" name="action" value="upload_ad_leads">
+                <input type="hidden" name="report_id" value="<?= h((string) $detailReport['id']) ?>">
+                <input type="file" name="ad_leads_file" accept=".xls,.xlsx" required>
+                <button class="primary-btn">Upload / Ganti Data</button>
+              </form>
+              <?php render_ad_leads_table($detailAdLeads); ?>
+            </section>
+          <?php endif; ?>
+
+          <section class="panel">
+            <div class="panel-head"><h2>Riwayat Status</h2><span>Log aktivitas laporan</span></div>
+            <div class="log-list">
+              <?php if (!$detailLogs): ?>
+                <div><strong>Belum ada log</strong><span>Riwayat akan muncul setelah laporan dibuat atau status berubah.</span></div>
+              <?php endif; ?>
+              <?php foreach ($detailLogs as $log): ?>
+                <div><strong><?= h((string) $log['created_at']) ?></strong><span><?= h((string) $log['actor_name']) ?> - <?= h((string) $log['action_name']) ?> <?= h((string) ($log['old_status'] ?? '')) ?> <?= $log['new_status'] ? '-> ' . h((string) $log['new_status']) : '' ?></span></div>
+              <?php endforeach; ?>
+            </div>
+          </section>
+        <?php endif; ?>
+      <?php elseif ($page === 'edit'): ?>
+        <?php if (!$editReport): ?>
+          <section class="panel">
+            <div class="panel-head"><h2>Laporan tidak ditemukan</h2><span>Data tidak tersedia di area ini</span></div>
+            <p class="muted">Pastikan laporan yang dibuka berasal dari <?= h($area) ?>.</p>
+            <a class="secondary-btn" href="<?= h(url_for('dashboard', $role)) ?>">Kembali ke Dashboard</a>
+          </section>
+        <?php elseif (!can_edit_report($role, (string) $editReport['status'])): ?>
+          <section class="panel">
+            <div class="panel-head"><h2>Tidak bisa diedit</h2><span>Status laporan: <?= h((string) $editReport['status']) ?></span></div>
+            <p class="muted">Role Staff Unit hanya bisa mengedit laporan berstatus Draft atau Revisi.</p>
+            <a class="secondary-btn" href="<?= h(url_for('detail', $role) . '&id=' . (int) $editReport['id']) ?>">Kembali ke Detail</a>
+          </section>
+        <?php else: ?>
+          <?php render_edit_form($editReport, $role, $references, $authUser); ?>
+        <?php endif; ?>
+      <?php elseif ($page === 'password'): ?>
+        <section class="panel form-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Ganti Password</h2>
+              <span>Gunakan password pribadi setelah login pertama</span>
+            </div>
+          </div>
+          <form class="data-form" method="post">
+            <input type="hidden" name="action" value="change_password">
+            <label><span>Password lama</span><input type="password" name="old_password" required></label>
+            <label><span>Password baru</span><input type="password" name="new_password" minlength="6" required></label>
+            <label><span>Ulangi password baru</span><input type="password" name="confirm_password" minlength="6" required></label>
+            <div class="form-actions"><button class="primary-btn">Simpan Password</button></div>
+          </form>
+        </section>
+      <?php elseif ($page === 'users' && ($authUser['role'] ?? '') === 'senior'): ?>
+        <section class="panel form-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Tambah User RSM</h2>
+              <span>Password tidak ditampilkan. RSM bisa membuat atau reset password baru.</span>
+            </div>
+          </div>
+          <form class="data-form" method="post">
+            <input type="hidden" name="action" value="admin_create_user">
+            <label><span>Nama</span><input name="name" required></label>
+            <label><span>NIK</span><input name="nik" placeholder="Opsional"></label>
+            <label><span>Username</span><input name="username" required></label>
+            <label><span>Role</span><select name="user_role"><option value="staff">Staff Unit</option><option value="koordinator">Koordinator Wilayah</option><option value="senior">Senior Manager</option></select></label>
+            <label><span>Jabatan</span><input name="jabatan" value="Staff Unit"></label>
+            <label><span>Regional</span><select name="regional"><option value="">Pilih regional</option><?php foreach (rsm_area_regionals($area) as $regionalOption): ?><option><?= h($regionalOption) ?></option><?php endforeach; ?></select></label>
+            <label><span>Area</span><input name="area" value="<?= h($area) ?>"></label>
+            <label><span>Kampus/Unit</span><input name="campus_name"></label>
+            <label><span>Password awal</span><input name="new_user_password" value="kptsukses" required></label>
+            <div class="form-actions"><button class="primary-btn">Tambah User</button></div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><h2>Daftar User RSM</h2><span>Password asli tidak bisa ditampilkan karena disimpan aman sebagai hash</span></div>
+          <?php render_users_table($managedUsers); ?>
+        </section>
+      <?php else: ?>
+        <section class="panel">
+          <div class="panel-head"><h2>User & Role</h2><span>Aturan akses operasional</span></div>
+          <div class="role-grid">
+            <?php foreach ($roles as $key => $item): ?>
+              <article class="role-policy">
+                <h3><?= h($item['label']) ?></h3>
+                <p><?= h($item['scope']) ?></p>
+                <ul>
+                  <?php foreach (role_points($key) as $point): ?>
+                    <li><?= h($point) ?></li>
+                  <?php endforeach; ?>
+                </ul>
+              </article>
+            <?php endforeach; ?>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><h2>Log Aktivitas</h2><span>Semua perubahan status wajib tercatat</span></div>
+          <div class="log-list">
+            <?php if (!$logs): ?>
+              <div><strong>Belum ada log</strong><span>Aktivitas status akan muncul setelah ada perubahan laporan.</span></div>
+            <?php endif; ?>
+            <?php foreach ($logs as $log): ?>
+              <div><strong><?= h((string) $log['created_at']) ?></strong><span><?= h((string) $log['actor_name']) ?> - <?= h((string) $log['action_name']) ?> <?= h((string) ($log['new_status'] ?? '')) ?></span></div>
+            <?php endforeach; ?>
+          </div>
+        </section>
+      <?php endif; ?>
+    </main>
+  </div>
+  <script src="assets/app.js"></script>
+</body>
+</html>
+<?php
+function render_login_page(?string $error): void
+{
+    ?>
+    <!doctype html>
+    <html lang="id">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Login RSM</title>
+      <link rel="stylesheet" href="assets/style.css">
+    </head>
+    <body class="login-body">
+      <main class="login-card">
+        <p class="eyebrow">Regional Senior Manager</p>
+        <h1>Masuk Dashboard</h1>
+        <p>Gunakan username dari NIK tanpa titik dan password yang diberikan admin.</p>
+        <?php if ($error): ?><div class="alert alert-danger"><?= h($error) ?></div><?php endif; ?>
+        <form method="post" class="login-form">
+          <input type="hidden" name="action" value="login">
+          <label><span>Username</span><input name="username" autocomplete="username" required autofocus></label>
+          <label><span>Password</span><input type="password" name="password" autocomplete="current-password" required></label>
+          <button class="primary-btn">Masuk</button>
+        </form>
+      </main>
+    </body>
+    </html>
+    <?php
+}
+
+function field_name_for(string $field): string
+{
+    $map = [
+        'Tanggal kegiatan' => 'report_date',
+        'Tanggal' => 'report_date',
+        'Wilayah' => 'wilayah',
+        'Unit/Kampus' => 'unit_name',
+        'Nama staff' => 'staff_name',
+        'Jenis kegiatan' => 'activity_kind',
+        'Nama kegiatan' => 'title',
+        'Lokasi kegiatan' => 'location_name',
+        'Target kegiatan' => 'target_text',
+        'Hasil kegiatan' => 'result_text',
+        'Jumlah prospek/leads' => 'leads_count',
+        'Catatan' => 'notes',
+        'Platform iklan' => 'platform',
+        'Nama campaign' => 'campaign_name',
+        'Tujuan iklan' => 'ad_goal',
+        'Anggaran diajukan' => 'budget_requested',
+        'Anggaran disetujui' => 'budget_approved',
+        'Realisasi pemakaian' => 'realization_amount',
+        'Jumlah leads masuk' => 'leads_count',
+        'CPL / Cost per Lead' => 'cpl',
+        'Link campaign' => 'campaign_link',
+        'Catatan performa iklan' => 'notes',
+        'Kategori aktivitas' => 'category',
+        'Deskripsi aktivitas' => 'title',
+        'Hasil aktivitas' => 'result_text',
+        'Kendala' => 'obstacle_text',
+        'Tindak lanjut' => 'follow_up_text',
+        'Upload dokumentasi/foto' => 'attachment_path',
+        'Upload bukti invoice/screenshot' => 'attachment_path',
+        'Upload data hasil iklan (.xls/.xlsx)' => 'ad_leads_file',
+        'Upload dokumentasi' => 'attachment_path',
+    ];
+
+    return $map[$field] ?? strtolower(preg_replace('/[^a-z0-9]+/i', '_', $field) ?? $field);
+}
+
+function is_staff_user(?array $authUser): bool
+{
+    return (string) ($authUser['role'] ?? '') === 'staff';
+}
+
+function staff_identity_value(string $field, ?array $authUser, array $references): string
+{
+    if ($field === 'Wilayah') {
+        return (string) (($authUser['regional'] ?? '') ?: ($references['regionals'][0] ?? ''));
+    }
+    if ($field === 'Unit/Kampus') {
+        return (string) (($authUser['campus_name'] ?? '') ?: ($references['campuses'][0]['label'] ?? ''));
+    }
+    if ($field === 'Nama staff') {
+        return (string) (($authUser['name'] ?? '') ?: ($references['staff'][0]['name'] ?? ''));
+    }
+
+    return '';
+}
+
+function render_locked_identity_input(string $field, string $name, ?array $authUser, array $references): void
+{
+    $value = staff_identity_value($field, $authUser, $references);
+    ?>
+    <input type="hidden" name="<?= h($name) ?>" value="<?= h($value) ?>">
+    <div class="locked-value" title="Otomatis sesuai akun login"><?= h($value !== '' ? $value : 'Belum terhubung') ?></div>
+    <?php
+}
+
+function render_form_panel(string $title, array $fields, array $options, array $statuses, string $action, array $references, ?array $authUser = null): void
+{
+    ?>
+    <section class="panel form-panel">
+      <div class="panel-head">
+        <h2><?= h($title) ?></h2>
+        <span>Form input operasional</span>
+      </div>
+      <form class="data-form" method="post" enctype="multipart/form-data">
+        <input type="hidden" name="action" value="<?= h($action) ?>">
+        <?php foreach ($fields as $index => $field): ?>
+          <?php $name = field_name_for($field); ?>
+          <label class="<?= in_array($field, ['Catatan', 'Hasil kegiatan', 'Deskripsi aktivitas', 'Catatan performa iklan', 'Kendala', 'Tindak lanjut', 'Upload data hasil iklan (.xls/.xlsx)'], true) ? 'wide' : '' ?>">
+            <span><?= h($field) ?></span>
+            <?php if (str_contains(strtolower($field), 'tanggal')): ?>
+              <input type="date" name="<?= h($name) ?>" value="<?= h(date('Y-m-d')) ?>">
+            <?php elseif (is_staff_user($authUser) && in_array($field, ['Wilayah', 'Unit/Kampus', 'Nama staff'], true)): ?>
+              <?php render_locked_identity_input($field, $name, $authUser, $references); ?>
+            <?php elseif ($field === 'Wilayah'): ?>
+              <select name="<?= h($name) ?>" required>
+                <option value="">Pilih wilayah</option>
+                <?php foreach ($references['regionals'] as $regionalOption): ?>
+                  <option value="<?= h((string) $regionalOption) ?>"><?= h((string) $regionalOption) ?></option>
+                <?php endforeach; ?>
+              </select>
+            <?php elseif ($field === 'Unit/Kampus'): ?>
+              <select name="<?= h($name) ?>" required>
+                <option value="">Pilih unit/kampus</option>
+                <?php foreach ($references['campuses'] as $campusOption): ?>
+                  <option value="<?= h((string) $campusOption['label']) ?>"><?= h((string) $campusOption['label']) ?><?= !empty($campusOption['kode_kampus']) ? ' [' . h(strtoupper((string) $campusOption['kode_kampus'])) . ']' : '' ?></option>
+                <?php endforeach; ?>
+              </select>
+            <?php elseif ($field === 'Nama staff'): ?>
+              <select name="<?= h($name) ?>" required>
+                <option value="">Pilih staff</option>
+                <?php foreach ($references['staff'] as $staffOption): ?>
+                  <option value="<?= h((string) $staffOption['name']) ?>"><?= h((string) $staffOption['name']) ?> - <?= h((string) ($staffOption['regional'] ?? '-')) ?></option>
+                <?php endforeach; ?>
+              </select>
+            <?php elseif (str_contains(strtolower($field), 'upload')): ?>
+              <?php if ($name === 'ad_leads_file'): ?>
+                <div class="file-with-action">
+                  <input type="file" name="<?= h($name) ?>" accept=".xls,.xlsx">
+                  <a class="secondary-btn" href="download-ad-lead-template.php">Download Template .xlsx</a>
+                </div>
+                <small class="field-hint">Bisa upload .xls atau .xlsx. Template yang disediakan format .xlsx.</small>
+              <?php else: ?>
+                <input type="file" name="<?= h($name) ?>">
+              <?php endif; ?>
+            <?php elseif (str_contains(strtolower($field), 'tujuan iklan')): ?>
+              <select name="<?= h($name) ?>"><option>Leads</option><option>Awareness</option><option>Traffic</option><option>Conversion</option></select>
+            <?php elseif (str_contains(strtolower($field), 'jenis') || str_contains(strtolower($field), 'platform') || str_contains(strtolower($field), 'kategori')): ?>
+              <select name="<?= h($name) ?>"><?php foreach ($options as $option): ?><option><?= h($option) ?></option><?php endforeach; ?></select>
+            <?php elseif (str_contains(strtolower($field), 'hasil') || str_contains(strtolower($field), 'catatan') || str_contains(strtolower($field), 'kendala') || str_contains(strtolower($field), 'tindak')): ?>
+              <textarea name="<?= h($name) ?>" rows="3"></textarea>
+            <?php else: ?>
+              <input name="<?= h($name) ?>">
+            <?php endif; ?>
+          </label>
+        <?php endforeach; ?>
+        <label><span>Status</span><select name="status"><?php foreach ($statuses as $status): ?><option><?= h($status) ?></option><?php endforeach; ?></select></label>
+        <div class="form-actions"><button class="secondary-btn" name="status" value="Draft">Simpan Draft</button><button class="primary-btn">Kirim Laporan</button></div>
+      </form>
+    </section>
+    <?php
+}
+
+function render_edit_form(array $report, string $role, array $references, ?array $authUser = null): void
+{
+    $type = (string) $report['report_type'];
+    $fields = report_fields_for_type($type);
+    $options = report_options_for_type($type);
+    $statuses = ['Draft', 'Revisi'];
+    ?>
+    <section class="panel form-panel">
+      <div class="panel-head">
+        <div>
+          <h2>Edit <?= h(report_label_for_type($type)) ?></h2>
+          <span><?= h((string) $report['title']) ?></span>
+        </div>
+        <a class="secondary-btn" href="<?= h(url_for('detail', $role) . '&id=' . (int) $report['id']) ?>">Kembali ke Detail</a>
+      </div>
+      <form class="data-form" method="post" enctype="multipart/form-data">
+        <input type="hidden" name="action" value="update_report">
+        <input type="hidden" name="report_id" value="<?= h((string) $report['id']) ?>">
+        <?php foreach ($fields as $field): ?>
+          <?php $name = field_name_for($field); ?>
+          <label class="<?= in_array($field, ['Catatan', 'Hasil kegiatan', 'Deskripsi aktivitas', 'Catatan performa iklan', 'Kendala', 'Tindak lanjut', 'Upload data hasil iklan (.xls/.xlsx)'], true) ? 'wide' : '' ?>">
+            <span><?= h($field) ?></span>
+            <?php render_edit_input($field, $name, $report, $options, $references, $authUser); ?>
+          </label>
+        <?php endforeach; ?>
+        <label><span>Status</span><select name="status"><?php foreach ($statuses as $status): ?><option<?= (string) $report['status'] === $status ? ' selected' : '' ?>><?= h($status) ?></option><?php endforeach; ?></select></label>
+        <div class="form-actions">
+          <a class="secondary-btn" href="<?= h(url_for(report_page_for($type), $role)) ?>">Batal</a>
+          <button class="primary-btn">Simpan Perubahan</button>
+        </div>
+      </form>
+    </section>
+    <?php
+}
+
+function render_edit_input(string $field, string $name, array $report, array $options, array $references, ?array $authUser = null): void
+{
+    $value = (string) ($report[$name] ?? '');
+    if (str_contains(strtolower($field), 'tanggal')) {
+        ?><input type="date" name="<?= h($name) ?>" value="<?= h($value !== '' ? $value : date('Y-m-d')) ?>"><?php
+    } elseif (is_staff_user($authUser) && in_array($field, ['Wilayah', 'Unit/Kampus', 'Nama staff'], true)) {
+        render_locked_identity_input($field, $name, $authUser, $references);
+    } elseif ($field === 'Wilayah') {
+        ?><select name="<?= h($name) ?>" required><?php foreach ($references['regionals'] as $regionalOption): ?><option value="<?= h((string) $regionalOption) ?>"<?= $value === (string) $regionalOption ? ' selected' : '' ?>><?= h((string) $regionalOption) ?></option><?php endforeach; ?></select><?php
+    } elseif ($field === 'Unit/Kampus') {
+        ?><select name="<?= h($name) ?>" required><?php foreach ($references['campuses'] as $campusOption): $label = (string) $campusOption['label']; ?><option value="<?= h($label) ?>"<?= $value === $label ? ' selected' : '' ?>><?= h($label) ?><?= !empty($campusOption['kode_kampus']) ? ' [' . h(strtoupper((string) $campusOption['kode_kampus'])) . ']' : '' ?></option><?php endforeach; ?></select><?php
+    } elseif ($field === 'Nama staff') {
+        ?><select name="<?= h($name) ?>" required><?php foreach ($references['staff'] as $staffOption): $label = (string) $staffOption['name']; ?><option value="<?= h($label) ?>"<?= $value === $label ? ' selected' : '' ?>><?= h($label) ?> - <?= h((string) ($staffOption['regional'] ?? '-')) ?></option><?php endforeach; ?></select><?php
+    } elseif ($name === 'ad_leads_file') {
+        ?><div class="file-with-action"><input type="file" name="<?= h($name) ?>" accept=".xls,.xlsx"><a class="secondary-btn" href="download-ad-lead-template.php">Download Template .xlsx</a></div><small class="field-hint">Kosongkan jika tidak ingin menambah data hasil iklan. Format upload: .xls atau .xlsx.</small><?php
+    } elseif (str_contains(strtolower($field), 'upload')) {
+        ?><input type="file" name="<?= h($name) ?>"><?php
+    } elseif (str_contains(strtolower($field), 'tujuan iklan')) {
+        ?><select name="<?= h($name) ?>"><?php foreach (['Leads', 'Awareness', 'Traffic', 'Conversion'] as $option): ?><option<?= $value === $option ? ' selected' : '' ?>><?= h($option) ?></option><?php endforeach; ?></select><?php
+    } elseif (str_contains(strtolower($field), 'jenis') || str_contains(strtolower($field), 'platform') || str_contains(strtolower($field), 'kategori')) {
+        ?><select name="<?= h($name) ?>"><?php foreach ($options as $option): ?><option<?= $value === $option ? ' selected' : '' ?>><?= h($option) ?></option><?php endforeach; ?></select><?php
+    } elseif (str_contains(strtolower($field), 'hasil') || str_contains(strtolower($field), 'catatan') || str_contains(strtolower($field), 'kendala') || str_contains(strtolower($field), 'tindak')) {
+        ?><textarea name="<?= h($name) ?>" rows="3"><?= h($value) ?></textarea><?php
+    } else {
+        ?><input name="<?= h($name) ?>" value="<?= h($value) ?>"><?php
+    }
+}
+
+function report_fields_for_type(string $type): array
+{
+    if ($type === 'ads') {
+        return ['Tanggal', 'Wilayah', 'Unit/Kampus', 'Platform iklan', 'Nama campaign', 'Tujuan iklan', 'Anggaran diajukan', 'Anggaran disetujui', 'Realisasi pemakaian', 'CPL / Cost per Lead', 'Link campaign', 'Upload data hasil iklan (.xls/.xlsx)', 'Catatan performa iklan'];
+    }
+    if ($type === 'other') {
+        return ['Tanggal', 'Wilayah', 'Unit/Kampus', 'Nama staff', 'Kategori aktivitas', 'Deskripsi aktivitas', 'Hasil aktivitas', 'Kendala', 'Tindak lanjut', 'Upload dokumentasi'];
+    }
+    return ['Tanggal kegiatan', 'Wilayah', 'Unit/Kampus', 'Nama staff', 'Jenis kegiatan', 'Nama kegiatan', 'Lokasi kegiatan', 'Target kegiatan', 'Hasil kegiatan', 'Jumlah prospek/leads', 'Catatan', 'Upload dokumentasi/foto'];
+}
+
+function report_options_for_type(string $type): array
+{
+    if ($type === 'ads') {
+        return ['Meta Ads', 'Google Ads', 'TikTok Ads', 'WhatsApp Blast', 'Marketplace/Portal', 'Lainnya'];
+    }
+    if ($type === 'other') {
+        return ['Meeting internal', 'Briefing', 'Training', 'Koordinasi kampus', 'Koordinasi mitra', 'Pelayanan calon mahasiswa', 'Administrasi PMB', 'Follow up pembayaran', 'Herregistrasi', 'Lainnya'];
+    }
+    return ['Follow up leads', 'Kunjungan sekolah', 'Kunjungan instansi', 'Sebar brosur', 'Pasang spanduk', 'Event kampus', 'Presentasi PMB', 'Aktivitas digital', 'Lainnya'];
+}
+
+function report_label_for_type(string $type): string
+{
+    return ['ads' => 'Laporan Iklan', 'other' => 'Aktivitas Lain', 'marketing' => 'Kegiatan Marketing'][$type] ?? 'Laporan';
+}
+
+function render_activity_table(array $rows, string $role): void
+{
+    ?>
+    <div class="table-wrap"><table><thead><tr><th>Tanggal</th><th>Wilayah</th><th>Unit/Kampus</th><th>Staff</th><th>Jenis</th><th>Nama kegiatan</th><th>Leads</th><th>Status</th><th>Aksi</th></tr></thead><tbody>
+      <?php if (!$rows): ?><tr><td colspan="9" class="empty-row">Belum ada data kegiatan marketing di database.</td></tr><?php endif; ?>
+      <?php foreach ($rows as $row): ?>
+        <tr><td><?= h((string) $row['report_date']) ?></td><td><?= h((string) $row['wilayah']) ?></td><td><?= h((string) $row['unit_name']) ?></td><td><?= h((string) $row['staff_name']) ?></td><td><?= h((string) ($row['activity_kind'] ?: '-')) ?></td><td><?= h((string) $row['title']) ?></td><td><?= h((string) $row['leads_count']) ?></td><td><?= badge((string) $row['status']) ?></td><td><?= action_buttons($role, (int) $row['id'], (string) $row['status']) ?></td></tr>
+      <?php endforeach; ?>
+    </tbody></table></div>
+    <?php
+}
+
+function render_ads_table(array $rows, string $role): void
+{
+    ?>
+    <div class="table-wrap"><table><thead><tr><th>Tanggal</th><th>Platform</th><th>Campaign</th><th>Anggaran</th><th>Realisasi</th><th>Leads</th><th>Closing</th><th>CPL</th><th>Status</th><th>Aksi</th></tr></thead><tbody>
+      <?php if (!$rows): ?><tr><td colspan="10" class="empty-row">Belum ada laporan anggaran iklan di database.</td></tr><?php endif; ?>
+      <?php foreach ($rows as $row): ?>
+        <tr><td><?= h((string) $row['report_date']) ?></td><td><?= h((string) ($row['platform'] ?: '-')) ?></td><td><?= h((string) ($row['campaign_name'] ?: $row['title'])) ?></td><td><?= h(money_idr((float) $row['budget_requested'])) ?></td><td><?= h(money_idr((float) $row['realization_amount'])) ?></td><td><?= h((string) $row['leads_count']) ?></td><td><?= h((string) ($row['closing_count'] ?? 0)) ?></td><td><?= h(money_idr((float) $row['cpl'])) ?></td><td><?= badge((string) $row['status']) ?></td><td><?= action_buttons($role, (int) $row['id'], (string) $row['status']) ?></td></tr>
+      <?php endforeach; ?>
+    </tbody></table></div>
+    <?php
+}
+
+function render_ad_leads_table(array $rows): void
+{
+    ?>
+    <div class="table-wrap"><table><thead><tr><th>Nama Lead</th><th>No. HP/WA</th><th>Email</th><th>Kampus</th><th>Jurusan</th><th>Kota Asal</th><th>Follow Up</th><th>Status Progress</th><th>Status Closing</th><th>Update Closing</th><th>Catatan</th></tr></thead><tbody>
+      <?php if (!$rows): ?><tr><td colspan="11" class="empty-row">Belum ada data hasil iklan yang diupload untuk laporan ini.</td></tr><?php endif; ?>
+      <?php foreach ($rows as $row): ?>
+        <tr>
+          <td><?= h(display_or_empty($row['lead_name'] ?? '')) ?></td>
+          <td><?= h(display_or_empty($row['whatsapp'] ?? '')) ?></td>
+          <td><?= h(display_or_empty($row['email'] ?? '')) ?></td>
+          <td><?= h(display_or_empty($row['campus_name'] ?? '')) ?></td>
+          <td><?= h(display_or_empty($row['major_name'] ?? '')) ?></td>
+          <td><?= h(display_or_empty($row['origin_city'] ?? '')) ?></td>
+          <td><?= h(display_or_empty($row['follow_up_result'] ?? '')) ?></td>
+          <td><?= h(display_or_empty($row['progress_status'] ?? '')) ?></td>
+          <td><?= closing_status_form((int) $row['id'], (string) ($row['closing_status'] ?? '')) ?></td>
+          <td><?= h(display_or_empty($row['closing_update'] ?? '')) ?></td>
+          <td><?= h(display_or_empty($row['notes'] ?? '')) ?></td>
+        </tr>
+      <?php endforeach; ?>
+    </tbody></table></div>
+    <?php
+}
+
+function closing_status_form(int $leadId, string $current): string
+{
+    $options = ['Belum closing', 'Potensi closing', 'Closing', 'Herregistrasi', 'Tidak closing'];
+    $html = '<form method="post" class="compact-status-form">'
+        . '<input type="hidden" name="action" value="update_lead_closing_status">'
+        . '<input type="hidden" name="lead_id" value="' . h((string) $leadId) . '">'
+        . '<select name="closing_status" onchange="this.form.submit()">';
+    foreach ($options as $option) {
+        $selected = strtolower($current) === strtolower($option) ? ' selected' : '';
+        $html .= '<option' . $selected . '>' . h($option) . '</option>';
+    }
+    return $html . '</select></form>';
+}
+
+function display_or_empty(mixed $value): string
+{
+    $value = trim((string) $value);
+    return $value !== '' ? $value : 'belum diisi';
+}
+
+function render_other_table(array $rows, string $role): void
+{
+    ?>
+    <div class="table-wrap"><table><thead><tr><th>Tanggal</th><th>Kategori</th><th>Staff</th><th>Hasil</th><th>Tindak lanjut</th><th>Status</th><th>Aksi</th></tr></thead><tbody>
+      <?php if (!$rows): ?><tr><td colspan="7" class="empty-row">Belum ada aktivitas lain di database.</td></tr><?php endif; ?>
+      <?php foreach ($rows as $row): ?>
+        <tr><td><?= h((string) $row['report_date']) ?></td><td><?= h((string) ($row['category'] ?: '-')) ?></td><td><?= h((string) $row['staff_name']) ?></td><td><?= h((string) ($row['result_text'] ?: '-')) ?></td><td><?= h((string) ($row['follow_up_text'] ?: '-')) ?></td><td><?= badge((string) $row['status']) ?></td><td><?= action_buttons($role, (int) $row['id'], (string) $row['status']) ?></td></tr>
+      <?php endforeach; ?>
+    </tbody></table></div>
+    <?php
+}
+
+function render_users_table(array $rows): void
+{
+    ?>
+    <div class="table-wrap"><table><thead><tr><th>Nama</th><th>NIK</th><th>Username</th><th>Role</th><th>Jabatan</th><th>Regional</th><th>Area</th><th>Status</th><th>Aksi</th></tr></thead><tbody>
+      <?php if (!$rows): ?><tr><td colspan="9" class="empty-row">Belum ada user RSM.</td></tr><?php endif; ?>
+      <?php foreach ($rows as $row): ?>
+        <tr>
+          <td><?= h((string) $row['name']) ?></td>
+          <td><?= h(display_or_empty($row['nik'] ?? '')) ?></td>
+          <td><?= h((string) $row['username']) ?></td>
+          <td><?= h((string) $row['role']) ?></td>
+          <td><?= h((string) $row['jabatan']) ?></td>
+          <td><?= h(display_or_empty($row['regional'] ?? '')) ?></td>
+          <td><?= h(display_or_empty($row['area'] ?? '')) ?></td>
+          <td><?= ((int) $row['is_active'] === 1) ? badge('Aktif') : badge('Nonaktif') ?></td>
+          <td>
+            <div class="icon-actions">
+              <button class="icon-action" type="button" title="Edit user" aria-label="Edit user" onclick="document.getElementById('edit-user-<?= h((string) $row['id']) ?>').classList.toggle('is-open')">&#9998;</button>
+              <form method="post" class="inline-action" title="Reset password user">
+                <input type="hidden" name="action" value="admin_reset_user_password">
+                <input type="hidden" name="user_id" value="<?= h((string) $row['id']) ?>">
+                <input class="icon-password" name="new_password" placeholder="Password baru" required minlength="6" title="Isi password baru">
+                <button class="icon-action" title="Reset password" aria-label="Reset password">&#8635;</button>
+              </form>
+              <form method="post" class="inline-action" title="<?= (int) $row['is_active'] === 1 ? 'Nonaktifkan user' : 'Aktifkan user' ?>">
+              <input type="hidden" name="action" value="admin_set_user_active">
+              <input type="hidden" name="user_id" value="<?= h((string) $row['id']) ?>">
+              <input type="hidden" name="is_active" value="<?= (int) $row['is_active'] === 1 ? '0' : '1' ?>">
+                <button class="icon-action <?= (int) $row['is_active'] === 1 ? 'danger' : '' ?>" title="<?= (int) $row['is_active'] === 1 ? 'Nonaktifkan user' : 'Aktifkan user' ?>" aria-label="<?= (int) $row['is_active'] === 1 ? 'Nonaktifkan user' : 'Aktifkan user' ?>"><?= (int) $row['is_active'] === 1 ? '&#9211;' : '&#10003;' ?></button>
+              </form>
+              <form method="post" class="inline-action" onsubmit="return confirm('Hapus user ini?')" title="Hapus user">
+                <input type="hidden" name="action" value="admin_delete_user">
+                <input type="hidden" name="user_id" value="<?= h((string) $row['id']) ?>">
+                <button class="icon-action danger" title="Hapus user" aria-label="Hapus user">&times;</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        <tr id="edit-user-<?= h((string) $row['id']) ?>" class="edit-user-row">
+          <td colspan="9">
+            <form method="post" class="edit-user-form">
+              <input type="hidden" name="action" value="admin_update_user">
+              <input type="hidden" name="user_id" value="<?= h((string) $row['id']) ?>">
+              <input name="name" value="<?= h((string) $row['name']) ?>" required title="Nama">
+              <input name="nik" value="<?= h((string) ($row['nik'] ?? '')) ?>" placeholder="NIK" title="NIK">
+              <input name="username" value="<?= h((string) $row['username']) ?>" required title="Username">
+              <select name="user_role" title="Role">
+                <?php foreach (['staff' => 'Staff Unit', 'koordinator' => 'Koordinator Wilayah', 'senior' => 'Senior Manager'] as $key => $label): ?>
+                  <option value="<?= h($key) ?>" <?= (string) $row['role'] === $key ? 'selected' : '' ?>><?= h($label) ?></option>
+                <?php endforeach; ?>
+              </select>
+              <input name="jabatan" value="<?= h((string) $row['jabatan']) ?>" required title="Jabatan">
+              <select name="regional" title="Regional">
+                <option value="">Regional</option>
+                <?php foreach (['Regional 1', 'Regional 2', 'Regional 3', 'Regional 4', 'Regional 5', 'Regional 6', 'Regional 7'] as $regionalOption): ?>
+                  <option <?= (string) ($row['regional'] ?? '') === $regionalOption ? 'selected' : '' ?>><?= h($regionalOption) ?></option>
+                <?php endforeach; ?>
+              </select>
+              <select name="area" title="Area">
+                <option value="">Area</option>
+                <option <?= (string) ($row['area'] ?? '') === 'Regional A' ? 'selected' : '' ?>>Regional A</option>
+                <option <?= (string) ($row['area'] ?? '') === 'Regional B' ? 'selected' : '' ?>>Regional B</option>
+              </select>
+              <input name="campus_name" value="<?= h((string) ($row['campus_name'] ?? '')) ?>" placeholder="Kampus/Unit" title="Kampus/Unit">
+              <button class="icon-action" title="Simpan perubahan" aria-label="Simpan perubahan">&#10003;</button>
+            </form>
+          </td>
+        </tr>
+      <?php endforeach; ?>
+    </tbody></table></div>
+    <?php
+}
+
+function action_buttons(string $role, int $id, string $status): string
+{
+    $buttons = '<a class="text-btn" href="' . h(url_for('detail', $role) . '&id=' . $id) . '">Detail</a>';
+    if (can_edit_report($role, $status)) {
+        $buttons .= '<a class="text-btn" href="' . h(url_for('edit', $role) . '&id=' . $id) . '">Edit</a>';
+        $buttons .= delete_form($id);
+    }
+    if (can_action($role, 'verifikasi')) {
+        $buttons .= status_form($id, 'Diverifikasi', 'Verifikasi') . status_form($id, 'Revisi', 'Revisi', true);
+    }
+    if (can_action($role, 'setujui')) {
+        $buttons .= status_form($id, 'Disetujui', 'Setujui') . status_form($id, 'Ditolak', 'Tolak', false, 'danger') . status_form($id, 'Revisi', 'Revisi', true);
+    }
+    return $buttons;
+}
+
+function can_edit_report(string $role, string $status): bool
+{
+    return can_action($role, 'edit-draft') && in_array(strtolower($status), ['draft', 'revisi'], true);
+}
+
+function delete_form(int $id): string
+{
+    return '<form method="post" class="inline-action" onsubmit="return confirm(\'Hapus laporan ini?\')">'
+        . '<input type="hidden" name="action" value="delete_report">'
+        . '<input type="hidden" name="report_id" value="' . h((string) $id) . '">'
+        . '<button class="text-btn danger">Hapus</button>'
+        . '</form>';
+}
+
+function report_page_for(string $type): string
+{
+    return [
+        'marketing' => 'kegiatan',
+        'ads' => 'anggaran',
+        'other' => 'aktivitas',
+    ][$type] ?? 'dashboard';
+}
+
+function detail_fields(array $report): array
+{
+    return [
+        'ID Laporan' => (string) ($report['id'] ?? ''),
+        'Area' => (string) ($report['area'] ?? ''),
+        'Jenis Laporan' => (string) ($report['report_type'] ?? ''),
+        'Tanggal' => (string) ($report['report_date'] ?? ''),
+        'Wilayah' => (string) ($report['wilayah'] ?? ''),
+        'Unit/Kampus' => (string) ($report['unit_name'] ?? ''),
+        'Nama Staff' => (string) ($report['staff_name'] ?? ''),
+        'Status' => (string) ($report['status'] ?? ''),
+        'Jenis/Kategori' => (string) (($report['activity_kind'] ?? '') ?: ($report['category'] ?? '') ?: ($report['platform'] ?? '')),
+        'Lokasi' => (string) ($report['location_name'] ?? ''),
+        'Target' => (string) ($report['target_text'] ?? ''),
+        'Hasil' => (string) ($report['result_text'] ?? ''),
+        'Jumlah Leads' => (string) ($report['leads_count'] ?? '0'),
+        'Jumlah Closing' => (string) ($report['closing_count'] ?? '0'),
+        'Platform Iklan' => (string) ($report['platform'] ?? ''),
+        'Campaign' => (string) ($report['campaign_name'] ?? ''),
+        'Tujuan Iklan' => (string) ($report['ad_goal'] ?? ''),
+        'Anggaran Diajukan' => money_idr((float) ($report['budget_requested'] ?? 0)),
+        'Anggaran Disetujui' => money_idr((float) ($report['budget_approved'] ?? 0)),
+        'Realisasi' => money_idr((float) ($report['realization_amount'] ?? 0)),
+        'CPL' => money_idr((float) ($report['cpl'] ?? 0)),
+        'Link Campaign' => (string) ($report['campaign_link'] ?? ''),
+        'Kendala' => (string) ($report['obstacle_text'] ?? ''),
+        'Tindak Lanjut' => (string) ($report['follow_up_text'] ?? ''),
+        'Dibuat Oleh' => (string) ($report['created_by_name'] ?? ''),
+        'Role Pembuat' => (string) ($report['created_by_role'] ?? ''),
+        'Dibuat Pada' => (string) ($report['created_at'] ?? ''),
+        'Diubah Pada' => (string) ($report['updated_at'] ?? ''),
+    ];
+}
+
+function status_form(int $id, string $status, string $label, bool $needsNote = false, string $tone = ''): string
+{
+    $note = $needsNote ? '<input class="revision-note" name="revision_note" placeholder="Catatan revisi" required>' : '';
+    return '<form method="post" class="inline-action">'
+        . '<input type="hidden" name="action" value="status_update">'
+        . '<input type="hidden" name="report_id" value="' . h((string) $id) . '">'
+        . '<input type="hidden" name="new_status" value="' . h($status) . '">'
+        . $note
+        . '<button class="text-btn ' . h($tone ?: ($needsNote ? 'warning' : '')) . '">' . h($label) . '</button>'
+        . '</form>';
+}
+
+function role_points(string $role): array
+{
+    return [
+        'senior' => ['Melihat semua wilayah, unit, dan staff', 'Menyetujui atau menolak laporan', 'Melihat seluruh anggaran iklan', 'Export semua laporan', 'Wajib memberi catatan jika revisi'],
+        'koordinator' => ['Melihat data wilayahnya saja', 'Memverifikasi laporan staff unit', 'Menambahkan kegiatan wilayah', 'Membuat rekap wilayah', 'Memberi catatan revisi kepada staff'],
+        'staff' => ['Menambahkan laporan kegiatan', 'Melihat laporan milik sendiri', 'Edit hanya saat Draft atau Revisi', 'Tidak melihat wilayah lain', 'Tidak bisa menyetujui laporan'],
+    ][$role] ?? [];
+}

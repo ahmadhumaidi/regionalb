@@ -1,0 +1,13 @@
+Options -Indexes
+
+<FilesMatch "^(config|config\.example|schema)\.php$">
+  Require all denied
+</FilesMatch>
+
+<Files "config.php">
+  Require all denied
+</Files>
+
+<Files "schema.sql">
+  Require all denied
+</Files>

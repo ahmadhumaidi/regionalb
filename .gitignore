@@ -1,0 +1,16 @@
+# File rahasia
+.env
+**/config.php
+!**/config.example.php
+
+# Runtime dan log
+runtime/
+**/runtime/
+*.log
+
+# Arsip deployment
+*.zip
+
+# Dependency
+vendor/
+node_modules/

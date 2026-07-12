@@ -1708,6 +1708,20 @@ function rsm_collab_source_url(string $reportName): string
     ][$reportName] ?? '';
 }
 
+function rsm_wib_timestamp(?string $value = null): string
+{
+    try {
+        $timezone = new DateTimeZone('Asia/Jakarta');
+        $date = $value === null || trim($value) === ''
+            ? new DateTimeImmutable('now', $timezone)
+            : new DateTimeImmutable($value);
+
+        return $date->setTimezone($timezone)->format('Y-m-d H:i:s');
+    } catch (Exception $exception) {
+        return $value ?? '';
+    }
+}
+
 function rsm_collab_report_from_url(string $reportName): array
 {
     $url = rsm_collab_source_url($reportName);
@@ -1801,7 +1815,7 @@ function rsm_collab_report_from_url(string $reportName): array
 
     return [
         'name' => $reportName,
-        'created_at' => date('Y-m-d H:i:s'),
+        'created_at' => rsm_wib_timestamp(),
         'source_url' => $url,
         'source_mode' => 'live_url',
         'tables' => $tables,

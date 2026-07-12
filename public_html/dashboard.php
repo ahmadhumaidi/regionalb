@@ -216,7 +216,8 @@ $summaryCards = [
 $registrationRecap = [
     'leads' => (float) $dashboardOverview['kpi']['leads'],
     'registrasi' => (float) $dashboardOverview['kpi']['registrasi'],
-    'herregistrasi' => (float) $dashboardOverview['kpi']['herregistrasi'],
+    'herregistrasi' => ($gamification['collab_totals']['herregistrasi'] ?? null) !== null ? (float) $gamification['collab_totals']['herregistrasi'] : (float) $dashboardOverview['kpi']['herregistrasi'],
+    'herregistrasi_source' => (string) ($gamification['sources']['herregistrasi'] ?? 'RSM fallback'),
     'conversion_rate' => (float) $dashboardOverview['kpi']['conversion_rate'],
     'cost_per_registrasi' => (float) $dashboardOverview['budget']['cost_per_registrasi'],
     'top_units' => array_slice($dashboardOverview['ranking'], 0, 3),
@@ -341,7 +342,7 @@ $registrationRecap = [
             </div>
             <div class="registration-stat-list">
               <div><span>Leads Masuk</span><strong><?= h(number_format($registrationRecap['leads'], 0, ',', '.')) ?></strong></div>
-              <div><span>Herregistrasi</span><strong><?= h(number_format($registrationRecap['herregistrasi'], 0, ',', '.')) ?></strong></div>
+              <div><span>Herregistrasi</span><strong><?= h(number_format($registrationRecap['herregistrasi'], 0, ',', '.')) ?></strong><small>Acuan: <?= h($registrationRecap['herregistrasi_source']) ?></small></div>
               <div><span>Cost / Registrasi</span><strong><?= h(money_idr($registrationRecap['cost_per_registrasi'])) ?></strong></div>
             </div>
             <div class="registration-top-units">
@@ -967,6 +968,7 @@ function render_gamification_panel(array $gamification): void
           <strong><?= h(number_format((float) ($myRank['points'] ?? 0), 0, ',', '.')) ?> poin</strong>
           <small>Rank #<?= h((string) ($myRank['rank'] ?? '-')) ?> - <?= h((string) ($myRank['staff_label'] ?? '-')) ?></small>
           <small>Closing acuan: <?= h(number_format((float) ($myRank['closing_for_points'] ?? 0), 0, ',', '.')) ?> dari <?= h((string) ($myRank['closing_points_source'] ?? 'RSM fallback')) ?></small>
+          <small>Herregistrasi acuan: <?= h(number_format((float) ($myRank['herreg_for_points'] ?? 0), 0, ',', '.')) ?> dari <?= h((string) ($myRank['herreg_points_source'] ?? 'RSM fallback')) ?></small>
           <div class="badge-row">
             <?php foreach (($myRank['badges'] ?? []) as $badge): ?>
               <b class="game-badge badge-tone-<?= h((string) ($badge['tone'] ?? 'slate')) ?>"><?= h((string) ($badge['label'] ?? 'Badge')) ?></b>
@@ -1015,6 +1017,7 @@ function render_gamification_panel(array $gamification): void
           <div class="leader-metrics">
             <b><?= h(number_format((float) ($row['points'] ?? 0), 0, ',', '.')) ?> poin</b>
             <small><?= h(number_format((float) ($row['closing_for_points'] ?? 0), 0, ',', '.')) ?> closing - <?= h((string) ($row['closing_points_source'] ?? 'RSM fallback')) ?></small>
+            <small><?= h(number_format((float) ($row['herreg_for_points'] ?? 0), 0, ',', '.')) ?> herreg - <?= h((string) ($row['herreg_points_source'] ?? 'RSM fallback')) ?></small>
           </div>
           <div class="badge-row compact">
             <?php foreach (array_slice(($row['badges'] ?? []), 0, 2) as $badge): ?>

@@ -1646,7 +1646,7 @@ function rsm_gamification_badges_for(array $row): array
     if ((int) ($row['registrasi_total'] ?? 0) >= 3) {
         $badges[] = ['label' => 'Closing Hunter', 'tone' => 'green'];
     }
-    if ((int) ($row['herregistrasi_total'] ?? 0) >= 1) {
+    if ((int) ($row['herreg_for_points'] ?? $row['herregistrasi_total'] ?? 0) >= 1) {
         $badges[] = ['label' => 'Herregistrasi Champion', 'tone' => 'purple'];
     }
     if ((int) ($row['report_days'] ?? 0) >= 5) {
@@ -1823,16 +1823,17 @@ function rsm_gamification_summary(string $area, array $filters, ?array $user = n
     $closingCollab = rsm_collab_staff_totals('Closing Collab', $filters);
     $herregCollab = rsm_collab_staff_totals('Herreg Collab', $filters);
     $usesCollabClosing = $closingCollab !== [];
+    $usesCollabHerreg = $herregCollab !== [];
     $rows = array_map(static function (array $row): array {
         return $row;
     }, $stmt->fetchAll());
 
-    $rows = array_map(static function (array $row) use ($closingCollab, $herregCollab, $usesCollabClosing): array {
+    $rows = array_map(static function (array $row) use ($closingCollab, $herregCollab, $usesCollabClosing, $usesCollabHerreg): array {
         $staffKey = rsm_username_from_nik_or_name(null, (string) ($row['staff_label'] ?? ''));
         $collabClosing = (float) ($closingCollab[$staffKey]['value'] ?? 0);
         $collabHerreg = (float) ($herregCollab[$staffKey]['value'] ?? 0);
         $closingForPoints = $usesCollabClosing ? $collabClosing : (float) ($row['registrasi_total'] ?? 0);
-        $herregForPoints = $herregCollab !== [] ? $collabHerreg : (float) ($row['herregistrasi_total'] ?? 0);
+        $herregForPoints = $usesCollabHerreg ? $collabHerreg : (float) ($row['herregistrasi_total'] ?? 0);
 
         $points =
             ((int) ($row['report_total'] ?? 0) * 5)
@@ -1846,6 +1847,7 @@ function rsm_gamification_summary(string $area, array $filters, ?array $user = n
 
         $row['points'] = $points;
         $row['closing_points_source'] = $usesCollabClosing ? 'Closing Collab' : 'RSM fallback';
+        $row['herreg_points_source'] = $usesCollabHerreg ? 'Herreg Collab' : 'RSM fallback';
         $row['closing_for_points'] = $closingForPoints;
         $row['herreg_for_points'] = $herregForPoints;
         $row['conversion_rate'] = rsm_dashboard_percent((float) ($row['registrasi_total'] ?? 0), (float) ($row['leads_total'] ?? 0));
@@ -1869,6 +1871,14 @@ function rsm_gamification_summary(string $area, array $filters, ?array $user = n
     return [
         'leaderboard' => $topRows,
         'my_rank' => $myRank,
+        'sources' => [
+            'closing' => $usesCollabClosing ? 'Closing Collab' : 'RSM fallback',
+            'herregistrasi' => $usesCollabHerreg ? 'Herreg Collab' : 'RSM fallback',
+        ],
+        'collab_totals' => [
+            'closing' => $usesCollabClosing ? array_sum(array_map(static fn (array $row): float => (float) ($row['value'] ?? 0), $closingCollab)) : null,
+            'herregistrasi' => $usesCollabHerreg ? array_sum(array_map(static fn (array $row): float => (float) ($row['value'] ?? 0), $herregCollab)) : null,
+        ],
         'challenge' => [
             'title' => 'Challenge Bulan Ini',
             'items' => [

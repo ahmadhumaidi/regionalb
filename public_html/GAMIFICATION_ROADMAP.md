@@ -60,7 +60,7 @@ Poin awal dihitung dari data existing.
 | Lead masuk | `rsm_reports.leads_count` atau `rsm_ad_leads` | 2 |
 | Lead sudah follow up | `follow_up_result` / `progress_status` | 4 |
 | Closing valid | `Closing Collab` dari report history, fallback `closing_status` atau `closing_count` | 20 |
-| Herregistrasi | `closing_status` eksplisit herregistrasi | 35 |
+| Herregistrasi | `Herreg Collab` dari report history, fallback `closing_status` eksplisit herregistrasi | 35 |
 | Upload data hasil iklan | `rsm_ad_leads.report_id` | 10 |
 | Aktivitas dengan kendala dan rencana jelas | `obstacle_text` + `follow_up_text` | 5 |
 
@@ -68,7 +68,9 @@ Catatan:
 
 - Jika laporan punya detail `rsm_ad_leads`, poin lead dan registrasi dihitung dari detail.
 - Untuk poin staff, closing utama mengikuti report `Closing Collab` dari `pencapaian_closing_collab_template.php` jika report history tersedia.
+- Untuk poin staff, herregistrasi utama mengikuti report `Herreg Collab` dari `pencapaian_herreg_collab_template.php` jika report history tersedia.
 - Jika report `Closing Collab` belum tersedia, sistem fallback ke `rsm_reports.closing_count` / detail `closing_status`.
+- Jika report `Herreg Collab` belum tersedia, sistem fallback ke detail `closing_status` yang eksplisit berarti herregistrasi.
 - Jika laporan tidak punya detail, fallback lead tetap ke `rsm_reports.leads_count`.
 - Ini mengikuti aturan anti-double-count Phase 1.
 

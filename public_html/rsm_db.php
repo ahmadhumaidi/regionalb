@@ -212,8 +212,8 @@ function rsm_upsert_user(string $name, ?string $nik, string $role, string $jabat
     $stmt->execute([$username]);
     $existingId = $stmt->fetchColumn();
     if ($existingId) {
-        rsm_pdo()->prepare('UPDATE rsm_users SET name = ?, nik = ?, role = ?, jabatan = ?, regional = ?, area = ?, campus_name = ?, is_active = 1 WHERE id = ?')
-            ->execute([$name, $nik, $role, $jabatan, $regional, $area, $campus, $existingId]);
+        rsm_pdo()->prepare('UPDATE rsm_users SET is_active = 1 WHERE id = ?')
+            ->execute([$existingId]);
         return;
     }
 

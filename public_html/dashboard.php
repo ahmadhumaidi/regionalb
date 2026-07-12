@@ -265,8 +265,8 @@ $registrationRecap = [
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title><?= h($pageTitles[$page]) ?> - <?= h($area) ?></title>
-  <link rel="stylesheet" href="assets/style.css">
-  <?php if ($page === 'profile'): ?><link rel="stylesheet" href="assets/profile.css"><?php endif; ?>
+  <link rel="stylesheet" href="assets/style.css?v=188b053">
+  <?php if ($page === 'profile'): ?><link rel="stylesheet" href="assets/profile.css?v=188b053"><?php endif; ?>
 </head>
 <body>
   <div class="app-shell">
@@ -710,7 +710,7 @@ function render_login_page(?string $error): void
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <title>Login RSM</title>
-      <link rel="stylesheet" href="assets/style.css">
+      <link rel="stylesheet" href="assets/style.css?v=188b053">
     </head>
     <body class="login-body">
       <main class="login-card">

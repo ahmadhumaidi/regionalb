@@ -1397,25 +1397,31 @@ function render_activity_table(array $rows, string $role): void
 
 function render_ads_table(array $rows, string $role): void
 {
-    $lastRegional = null;
-    $lastCampus = null;
+    $groups = [];
+    foreach ($rows as $row) {
+        $regional = (string) (($row['wilayah'] ?? '') ?: 'Regional belum diatur');
+        $campus = (string) (($row['unit_name'] ?? '') ?: 'Kampus belum diatur');
+        $regionalKey = strtolower($regional);
+        $campusKey = strtolower($campus);
+        if (!isset($groups[$regionalKey])) {
+            $groups[$regionalKey] = ['label' => $regional, 'campuses' => []];
+        }
+        if (!isset($groups[$regionalKey]['campuses'][$campusKey])) {
+            $groups[$regionalKey]['campuses'][$campusKey] = ['label' => $campus, 'rows' => []];
+        }
+        $groups[$regionalKey]['campuses'][$campusKey]['rows'][] = $row;
+    }
     ?>
     <div class="table-wrap"><table><thead><tr><th>Tanggal</th><th>Unit/Kampus</th><th>Platform</th><th>Campaign</th><th>Anggaran</th><th>Realisasi</th><th>Leads</th><th>Closing</th><th>CPL</th><th>Status</th><th>Aksi</th></tr></thead><tbody>
       <?php if (!$rows): ?><tr><td colspan="11" class="empty-row">Belum ada laporan anggaran iklan di database.</td></tr><?php endif; ?>
-      <?php foreach ($rows as $row): ?>
-        <?php
-          $regional = (string) (($row['wilayah'] ?? '') ?: 'Regional belum diatur');
-          $campus = (string) (($row['unit_name'] ?? '') ?: 'Kampus belum diatur');
-          if ($regional !== $lastRegional):
-            $lastRegional = $regional;
-            $lastCampus = null;
-        ?>
-          <tr class="group-heading"><td colspan="11">Regional: <?= h($regional) ?></td></tr>
-        <?php endif; ?>
-        <?php if ($campus !== $lastCampus): $lastCampus = $campus; ?>
-          <tr class="group-subheading"><td colspan="11">Nama Kampus: <?= h($campus) ?></td></tr>
-        <?php endif; ?>
-        <tr><td><?= h((string) $row['report_date']) ?></td><td><?= h((string) (($row['unit_name'] ?? '') ?: '-')) ?></td><td><?= h((string) ($row['platform'] ?: '-')) ?></td><td><?= h((string) ($row['campaign_name'] ?: $row['title'])) ?></td><td><?= h(money_idr((float) $row['budget_requested'])) ?></td><td><?= h(money_idr((float) $row['realization_amount'])) ?></td><td><?= h((string) $row['leads_count']) ?></td><td><?= h((string) ($row['closing_count'] ?? 0)) ?></td><td><?= h(money_idr((float) $row['cpl'])) ?></td><td><?= badge((string) $row['status']) ?></td><td><?= action_buttons($role, (int) $row['id'], (string) $row['status']) ?></td></tr>
+      <?php foreach ($groups as $regionalGroup): ?>
+        <tr class="group-heading"><td colspan="11">Regional: <?= h((string) $regionalGroup['label']) ?></td></tr>
+        <?php foreach ($regionalGroup['campuses'] as $campusGroup): ?>
+          <tr class="group-subheading"><td colspan="11">Nama Kampus: <?= h((string) $campusGroup['label']) ?></td></tr>
+          <?php foreach ($campusGroup['rows'] as $row): ?>
+            <tr><td><?= h((string) $row['report_date']) ?></td><td><?= h((string) (($row['unit_name'] ?? '') ?: '-')) ?></td><td><?= h((string) ($row['platform'] ?: '-')) ?></td><td><?= h((string) ($row['campaign_name'] ?: $row['title'])) ?></td><td><?= h(money_idr((float) $row['budget_requested'])) ?></td><td><?= h(money_idr((float) $row['realization_amount'])) ?></td><td><?= h((string) $row['leads_count']) ?></td><td><?= h((string) ($row['closing_count'] ?? 0)) ?></td><td><?= h(money_idr((float) $row['cpl'])) ?></td><td><?= badge((string) $row['status']) ?></td><td><?= action_buttons($role, (int) $row['id'], (string) $row['status']) ?></td></tr>
+          <?php endforeach; ?>
+        <?php endforeach; ?>
       <?php endforeach; ?>
     </tbody></table></div>
     <?php

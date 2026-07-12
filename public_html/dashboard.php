@@ -51,6 +51,16 @@ function url_for(string $page, string $role): string
     return '?page=' . rawurlencode($page) . ($GLOBALS['roleQuery'] ?? '');
 }
 
+function selected_attr(string $current, string $value): string
+{
+    return $current === $value ? ' selected' : '';
+}
+
+function percent_label(float $value): string
+{
+    return number_format($value, 2, ',', '.') . '%';
+}
+
 function badge(string $status): string
 {
     $key = strtolower(str_replace(' ', '-', $status));
@@ -97,6 +107,16 @@ $editReport = null;
 $authUser = null;
 $loginError = null;
 $managedUsers = [];
+$dashboardFilters = rsm_dashboard_filters_from_request($_GET);
+$dashboardOverview = [
+    'status_map' => ['report_type' => [], 'status' => [], 'progress_status' => [], 'follow_up_result' => [], 'closing_status' => []],
+    'status_buckets' => ['registrasi' => [], 'herregistrasi' => []],
+    'kpi' => ['leads' => 0, 'follow_up' => 0, 'registrasi' => 0, 'herregistrasi' => 0, 'conversion_rate' => 0],
+    'funnel' => [],
+    'budget' => ['requested' => 0, 'approved' => 0, 'spend' => 0, 'remaining' => 0, 'ads_leads' => 0, 'ads_registrasi' => 0, 'cpl' => 0, 'cost_per_registrasi' => 0],
+    'ranking' => [],
+    'daily_reports' => [],
+];
 $references = [
     'regionals' => [],
     'staff' => [],
@@ -157,6 +177,7 @@ try {
     $ads = rsm_reports($area, 'ads', 50, $authUser);
     $otherActivities = rsm_reports($area, 'other', 50, $authUser);
     $logs = rsm_logs($area, 20, $authUser);
+    $dashboardOverview = rsm_dashboard_overview($area, $dashboardFilters, $authUser);
     if ($page === 'users' && ($authUser['role'] ?? '') === 'senior') {
         $managedUsers = rsm_users($area);
     }
@@ -178,12 +199,12 @@ try {
 $latestActivities = array_slice($activities, 0, 8);
 
 $summaryCards = [
-    ['label' => 'Kegiatan bulan ini', 'value' => number_format((float) $summary['marketing_count'], 0, ',', '.'), 'tone' => 'blue', 'note' => 'Data dari tabel rsm_reports'],
-    ['label' => 'Anggaran iklan', 'value' => money_idr((float) $summary['budget_total']), 'tone' => 'purple', 'note' => 'Total pengajuan'],
-    ['label' => 'Realisasi anggaran', 'value' => money_idr((float) $summary['realization_total']), 'tone' => 'green', 'note' => 'Pemakaian aktual'],
-    ['label' => 'Aktivitas lain', 'value' => number_format((float) $summary['other_count'], 0, ',', '.'), 'tone' => 'cyan', 'note' => 'Koordinasi dan administrasi'],
-    ['label' => 'Laporan pending', 'value' => number_format((float) $summary['pending_count'], 0, ',', '.'), 'tone' => 'amber', 'note' => 'Menunggu tindak lanjut'],
-    ['label' => 'Disetujui', 'value' => number_format((float) $summary['approved_count'], 0, ',', '.'), 'tone' => 'emerald', 'note' => 'Selesai diverifikasi'],
+    ['label' => 'Leads', 'value' => number_format((float) $dashboardOverview['kpi']['leads'], 0, ',', '.'), 'tone' => 'blue', 'note' => 'Target belum diatur'],
+    ['label' => 'Follow Up', 'value' => number_format((float) $dashboardOverview['kpi']['follow_up'], 0, ',', '.'), 'tone' => 'cyan', 'note' => 'Dari detail lead yang sudah ditindaklanjuti'],
+    ['label' => 'Registrasi', 'value' => number_format((float) $dashboardOverview['kpi']['registrasi'], 0, ',', '.'), 'tone' => 'green', 'note' => 'Mengikuti mapping status aktual'],
+    ['label' => 'Herregistrasi', 'value' => number_format((float) $dashboardOverview['kpi']['herregistrasi'], 0, ',', '.'), 'tone' => 'purple', 'note' => 'Hanya status eksplisit herregistrasi'],
+    ['label' => 'Conversion Rate', 'value' => percent_label((float) $dashboardOverview['kpi']['conversion_rate']), 'tone' => 'amber', 'note' => 'Registrasi dibagi leads'],
+    ['label' => 'Target PMB', 'value' => 'Belum diatur', 'tone' => 'slate', 'note' => 'Phase 1 belum membuat tabel target'],
 ];
 ?><!doctype html>
 <html lang="id">
@@ -266,29 +287,67 @@ $summaryCards = [
           <?php endforeach; ?>
         </section>
 
-        <section class="filter-bar">
-          <input type="date" value="2026-06-30">
-          <?php if (($authUser['role'] ?? '') === 'staff'): ?>
-            <input class="locked-input" value="<?= h(staff_identity_value('Wilayah', $authUser, $references)) ?>" readonly title="Otomatis sesuai akun login">
-            <input class="locked-input" value="<?= h(staff_identity_value('Unit/Kampus', $authUser, $references)) ?>" readonly title="Otomatis sesuai akun login">
-            <input class="locked-input" value="<?= h(staff_identity_value('Nama staff', $authUser, $references)) ?>" readonly title="Otomatis sesuai akun login">
-          <?php else: ?>
-            <select><option>Semua Wilayah</option><?php foreach ($references['regionals'] as $regionalOption): ?><option><?= h((string) $regionalOption) ?></option><?php endforeach; ?></select>
-            <select><option>Semua Unit/Kampus</option><?php foreach ($references['campuses'] as $campusOption): ?><option><?= h((string) $campusOption['label']) ?></option><?php endforeach; ?></select>
-            <select><option>Semua Staff</option><?php foreach ($references['staff'] as $staffOption): ?><option><?= h((string) $staffOption['name']) ?></option><?php endforeach; ?></select>
+        <form class="filter-bar dashboard-filter" method="get">
+          <input type="hidden" name="page" value="dashboard">
+          <?php if (count($allowedRoleKeys) > 1): ?>
+            <input type="hidden" name="role" value="<?= h($role) ?>">
           <?php endif; ?>
-          <select><option>Semua Status</option><option>Draft</option><option>Dikirim</option><option>Diverifikasi</option><option>Disetujui</option><option>Revisi</option></select>
-        </section>
+          <label><span>Bulan PMB</span><input type="month" name="month" value="<?= h((string) $dashboardFilters['month']) ?>"></label>
+          <label><span>Dari tanggal</span><input type="date" name="date_from" value="<?= h((string) $dashboardFilters['date_from']) ?>"></label>
+          <label><span>Sampai tanggal</span><input type="date" name="date_to" value="<?= h((string) $dashboardFilters['date_to']) ?>"></label>
+          <?php if (($authUser['role'] ?? '') === 'staff'): ?>
+            <label><span>Wilayah</span><input class="locked-input" value="<?= h(staff_identity_value('Wilayah', $authUser, $references)) ?>" readonly title="Otomatis sesuai akun login"></label>
+            <label><span>Unit/Kampus</span><input class="locked-input" value="<?= h(staff_identity_value('Unit/Kampus', $authUser, $references)) ?>" readonly title="Otomatis sesuai akun login"></label>
+            <label><span>Staff</span><input class="locked-input" value="<?= h(staff_identity_value('Nama staff', $authUser, $references)) ?>" readonly title="Otomatis sesuai akun login"></label>
+          <?php else: ?>
+            <label><span>Wilayah</span><select name="wilayah"><option value="">Semua Wilayah</option><?php foreach ($references['regionals'] as $regionalOption): $value = (string) $regionalOption; ?><option value="<?= h($value) ?>"<?= selected_attr((string) $dashboardFilters['wilayah'], $value) ?>><?= h($value) ?></option><?php endforeach; ?></select></label>
+            <label><span>Unit/Kampus</span><select name="unit_name"><option value="">Semua Unit/Kampus</option><?php foreach ($references['campuses'] as $campusOption): $value = (string) $campusOption['label']; ?><option value="<?= h($value) ?>"<?= selected_attr((string) $dashboardFilters['unit_name'], $value) ?>><?= h($value) ?></option><?php endforeach; ?></select></label>
+            <label><span>Staff</span><select name="staff_name"><option value="">Semua Staff</option><?php foreach ($references['staff'] as $staffOption): $value = (string) $staffOption['name']; ?><option value="<?= h($value) ?>"<?= selected_attr((string) $dashboardFilters['staff_name'], $value) ?>><?= h($value) ?></option><?php endforeach; ?></select></label>
+          <?php endif; ?>
+          <label><span>Platform</span><select name="platform"><option value="">Semua Platform</option><?php foreach (array_filter($dashboardOverview['status_map']['report_type'] ? array_unique(array_map(static fn (array $row): string => (string) ($row['platform'] ?? ''), $ads)) : []) as $platformOption): ?><option value="<?= h($platformOption) ?>"<?= selected_attr((string) $dashboardFilters['platform'], $platformOption) ?>><?= h($platformOption) ?></option><?php endforeach; ?></select></label>
+          <label><span>Status</span><select name="status"><option value="">Semua Status</option><?php foreach ($dashboardOverview['status_map']['status'] as $statusOption): ?><option value="<?= h((string) $statusOption) ?>"<?= selected_attr((string) $dashboardFilters['status'], (string) $statusOption) ?>><?= h((string) $statusOption) ?></option><?php endforeach; ?></select></label>
+          <div class="filter-actions"><button class="primary-btn">Terapkan</button><a class="secondary-btn" href="<?= h(url_for('dashboard', $role)) ?>">Reset</a></div>
+        </form>
 
-        <section class="chart-grid">
-          <article class="panel"><div class="panel-head"><h2>Kegiatan per Wilayah</h2><span>Bulan ini</span></div><div class="bar-chart"><i style="height:75%"></i><i style="height:58%"></i><i style="height:86%"></i><i style="height:44%"></i><i style="height:64%"></i></div></article>
-          <article class="panel"><div class="panel-head"><h2>Anggaran Iklan</h2><span>Budget vs realisasi</span></div><div class="budget-chart"><span style="width:82%"></span><span style="width:69%"></span><span style="width:54%"></span><span style="width:73%"></span></div></article>
-          <article class="panel"><div class="panel-head"><h2>Aktivitas Staff/Unit</h2><span>Top kontribusi</span></div><div class="donut"></div></article>
+        <section class="dashboard-grid">
+          <article class="panel funnel-panel">
+            <div class="panel-head"><h2>Funnel Marketing</h2><span>Leads - Follow Up - Registrasi - Herregistrasi</span></div>
+            <div class="funnel-list">
+              <?php foreach ($dashboardOverview['funnel'] as $item): ?>
+                <div class="funnel-row">
+                  <div><strong><?= h((string) $item['label']) ?></strong><span><?= h(percent_label((float) $item['rate'])) ?> dari leads</span></div>
+                  <b><?= h(number_format((float) $item['value'], 0, ',', '.')) ?></b>
+                  <i style="width: <?= h((string) max(3, min(100, (float) $item['rate']))) ?>%"></i>
+                </div>
+              <?php endforeach; ?>
+            </div>
+          </article>
+          <article class="panel budget-panel">
+            <div class="panel-head"><h2>Monitoring Anggaran Iklan</h2><span>Pengajuan, approved, spend, CPL</span></div>
+            <div class="metric-grid compact-metrics">
+              <div><span>Pengajuan</span><strong><?= h(money_idr((float) $dashboardOverview['budget']['requested'])) ?></strong></div>
+              <div><span>Disetujui</span><strong><?= h(money_idr((float) $dashboardOverview['budget']['approved'])) ?></strong></div>
+              <div><span>Spend</span><strong><?= h(money_idr((float) $dashboardOverview['budget']['spend'])) ?></strong></div>
+              <div><span>Sisa</span><strong><?= h(money_idr((float) $dashboardOverview['budget']['remaining'])) ?></strong></div>
+              <div><span>CPL</span><strong><?= h(money_idr((float) $dashboardOverview['budget']['cpl'])) ?></strong></div>
+              <div><span>Cost / Registrasi</span><strong><?= h(money_idr((float) $dashboardOverview['budget']['cost_per_registrasi'])) ?></strong></div>
+            </div>
+          </article>
         </section>
 
         <section class="panel">
-          <div class="panel-head"><h2>Aktivitas Terbaru</h2><a href="<?= h(url_for('kegiatan', $role)) ?>">Lihat semua</a></div>
-          <?php render_activity_table($latestActivities, $role); ?>
+          <div class="panel-head"><h2>Ranking Top 10 Unit/Kampus</h2><span>Berdasarkan registrasi, partner_campus_id sebagai key utama</span></div>
+          <?php render_ranking_table($dashboardOverview['ranking']); ?>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><h2>Laporan Harian Staff Terbaru</h2><span>Aktivitas, hasil, kendala, dan rencana berikutnya</span></div>
+          <?php render_daily_report_table($dashboardOverview['daily_reports']); ?>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><h2>Mapping Status Aktual</h2><span>Dibaca dari database sesuai scope user</span></div>
+          <?php render_status_mapping_panel($dashboardOverview['status_map'], $dashboardOverview['status_buckets']); ?>
         </section>
       <?php elseif ($page === 'kegiatan'): ?>
         <?php render_form_panel('Tambah Kegiatan Marketing', [
@@ -761,6 +820,81 @@ function report_options_for_type(string $type): array
 function report_label_for_type(string $type): string
 {
     return ['ads' => 'Laporan Iklan', 'other' => 'Aktivitas Lain', 'marketing' => 'Kegiatan Marketing'][$type] ?? 'Laporan';
+}
+
+function render_ranking_table(array $rows): void
+{
+    ?>
+    <div class="table-wrap"><table><thead><tr><th>Rank</th><th>Unit/Kampus</th><th>Leads</th><th>Registrasi</th><th>Herregistrasi</th><th>Conversion</th><th>Spend</th><th>CPL</th><th>Cost/Registrasi</th></tr></thead><tbody>
+      <?php if (!$rows): ?><tr><td colspan="9" class="empty-row">Belum ada data ranking pada periode/filter ini.</td></tr><?php endif; ?>
+      <?php foreach ($rows as $index => $row): ?>
+        <tr>
+          <td><?= h((string) ($index + 1)) ?></td>
+          <td><?= h((string) ($row['unit_label'] ?: '-')) ?></td>
+          <td><?= h(number_format((float) ($row['leads_total'] ?? 0), 0, ',', '.')) ?></td>
+          <td><?= h(number_format((float) ($row['registrasi_total'] ?? 0), 0, ',', '.')) ?></td>
+          <td><?= h(number_format((float) ($row['herregistrasi_total'] ?? 0), 0, ',', '.')) ?></td>
+          <td><?= h(percent_label((float) ($row['conversion_rate'] ?? 0))) ?></td>
+          <td><?= h(money_idr((float) ($row['spend_total'] ?? 0))) ?></td>
+          <td><?= h(money_idr((float) ($row['cpl'] ?? 0))) ?></td>
+          <td><?= h(money_idr((float) ($row['cost_per_registrasi'] ?? 0))) ?></td>
+        </tr>
+      <?php endforeach; ?>
+    </tbody></table></div>
+    <?php
+}
+
+function render_daily_report_table(array $rows): void
+{
+    ?>
+    <div class="table-wrap"><table><thead><tr><th>Tanggal</th><th>Staff</th><th>Unit/Kampus</th><th>Jenis</th><th>Aktivitas</th><th>Hasil</th><th>Kendala</th><th>Rencana Berikutnya</th><th>Status</th></tr></thead><tbody>
+      <?php if (!$rows): ?><tr><td colspan="9" class="empty-row">Belum ada laporan staff pada periode/filter ini.</td></tr><?php endif; ?>
+      <?php foreach ($rows as $row): ?>
+        <tr>
+          <td><?= h((string) ($row['report_date'] ?? '-')) ?></td>
+          <td><?= h((string) ($row['staff_name'] ?? '-')) ?></td>
+          <td><?= h((string) ($row['unit_name'] ?? '-')) ?></td>
+          <td><?= h((string) ($row['report_type'] ?? '-')) ?></td>
+          <td><?= h((string) (($row['category'] ?? '') ?: ($row['title'] ?? '-'))) ?></td>
+          <td><?= h((string) (($row['result_text'] ?? '') ?: '-')) ?></td>
+          <td><?= h((string) (($row['obstacle_text'] ?? '') ?: '-')) ?></td>
+          <td><?= h((string) (($row['follow_up_text'] ?? '') ?: '-')) ?></td>
+          <td><?= badge((string) ($row['status'] ?? '-')) ?></td>
+        </tr>
+      <?php endforeach; ?>
+    </tbody></table></div>
+    <?php
+}
+
+function render_status_mapping_panel(array $statusMap, array $buckets): void
+{
+    $labels = [
+        'report_type' => 'Jenis Laporan',
+        'status' => 'Status Laporan',
+        'progress_status' => 'Progress Lead',
+        'follow_up_result' => 'Hasil Follow Up',
+        'closing_status' => 'Status Closing',
+    ];
+    ?>
+    <div class="status-map-grid">
+      <?php foreach ($labels as $key => $label): ?>
+        <div class="status-map-card">
+          <span><?= h($label) ?></span>
+          <?php if (empty($statusMap[$key])): ?>
+            <strong>Belum ada nilai</strong>
+          <?php else: ?>
+            <div class="status-chip-list">
+              <?php foreach ($statusMap[$key] as $value): ?><b><?= h((string) $value) ?></b><?php endforeach; ?>
+            </div>
+          <?php endif; ?>
+        </div>
+      <?php endforeach; ?>
+    </div>
+    <div class="mapping-note">
+      <strong>Registrasi:</strong> <?= h($buckets['registrasi'] ? implode(', ', $buckets['registrasi']) : 'Belum ada status detail yang bisa dipetakan') ?>.
+      <strong>Herregistrasi:</strong> <?= h($buckets['herregistrasi'] ? implode(', ', $buckets['herregistrasi']) : 'Belum ada status eksplisit herregistrasi') ?>.
+    </div>
+    <?php
 }
 
 function render_activity_table(array $rows, string $role): void

@@ -1384,6 +1384,253 @@ function rsm_normalize_header(string $header): string
     return trim($header, '_');
 }
 
+function rsm_dashboard_filters_from_request(array $input): array
+{
+    $month = preg_match('/^\d{4}-\d{2}$/', (string) ($input['month'] ?? '')) ? (string) $input['month'] : date('Y-m');
+    $dateFrom = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($input['date_from'] ?? '')) ? (string) $input['date_from'] : '';
+    $dateTo = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($input['date_to'] ?? '')) ? (string) $input['date_to'] : '';
+
+    if ($dateFrom === '' && $dateTo === '') {
+        $dateFrom = $month . '-01';
+        $dateTo = date('Y-m-t', strtotime($dateFrom));
+    } elseif ($dateFrom !== '' && $dateTo === '') {
+        $dateTo = $dateFrom;
+    } elseif ($dateFrom === '' && $dateTo !== '') {
+        $dateFrom = $dateTo;
+    }
+
+    if ($dateFrom > $dateTo) {
+        [$dateFrom, $dateTo] = [$dateTo, $dateFrom];
+    }
+
+    return [
+        'month' => $month,
+        'date_from' => $dateFrom,
+        'date_to' => $dateTo,
+        'wilayah' => trim((string) ($input['wilayah'] ?? '')),
+        'unit_name' => trim((string) ($input['unit_name'] ?? '')),
+        'staff_name' => trim((string) ($input['staff_name'] ?? '')),
+        'platform' => trim((string) ($input['platform'] ?? '')),
+        'status' => trim((string) ($input['status'] ?? '')),
+    ];
+}
+
+function rsm_dashboard_filter_sql(array $filters, string $alias = 'r'): array
+{
+    $prefix = $alias !== '' ? $alias . '.' : '';
+    $sql = '';
+    $params = [];
+
+    if (($filters['date_from'] ?? '') !== '') {
+        $sql .= " AND {$prefix}report_date >= ?";
+        $params[] = (string) $filters['date_from'];
+    }
+    if (($filters['date_to'] ?? '') !== '') {
+        $sql .= " AND {$prefix}report_date <= ?";
+        $params[] = (string) $filters['date_to'];
+    }
+    foreach (['wilayah', 'unit_name', 'staff_name', 'platform', 'status'] as $field) {
+        if (($filters[$field] ?? '') !== '') {
+            $sql .= " AND {$prefix}{$field} = ?";
+            $params[] = (string) $filters[$field];
+        }
+    }
+
+    return [$sql, $params];
+}
+
+function rsm_dashboard_percent(float $part, float $whole): float
+{
+    return $whole > 0 ? round(($part / $whole) * 100, 2) : 0.0;
+}
+
+function rsm_dashboard_divide(float $part, float $whole): float
+{
+    return $whole > 0 ? $part / $whole : 0.0;
+}
+
+function rsm_dashboard_status_map(string $area, array $filters, ?array $user): array
+{
+    [$filterSql, $filterParams] = rsm_dashboard_filter_sql($filters, 'r');
+    [$scopeSql, $scopeParams] = rsm_report_scope_sql($user, 'r');
+    $params = array_merge([$area], $filterParams, $scopeParams);
+
+    $readDistinct = static function (string $select, string $from, string $where = '') use ($filterSql, $scopeSql, $params): array {
+        $stmt = rsm_pdo()->prepare(
+            "SELECT DISTINCT {$select} AS value
+             FROM {$from}
+             WHERE r.area = ? {$filterSql} {$scopeSql} {$where}
+             ORDER BY value"
+        );
+        $stmt->execute($params);
+        return array_values(array_filter(array_map(static fn (array $row): string => trim((string) ($row['value'] ?? '')), $stmt->fetchAll()), static fn (string $value): bool => $value !== ''));
+    };
+
+    return [
+        'report_type' => $readDistinct('r.report_type', 'rsm_reports r'),
+        'status' => $readDistinct('r.status', 'rsm_reports r'),
+        'progress_status' => $readDistinct('l.progress_status', 'rsm_reports r JOIN rsm_ad_leads l ON l.report_id = r.id', " AND COALESCE(l.progress_status, '') <> ''"),
+        'follow_up_result' => $readDistinct('l.follow_up_result', 'rsm_reports r JOIN rsm_ad_leads l ON l.report_id = r.id', " AND COALESCE(l.follow_up_result, '') <> ''"),
+        'closing_status' => $readDistinct('l.closing_status', 'rsm_reports r JOIN rsm_ad_leads l ON l.report_id = r.id', " AND COALESCE(l.closing_status, '') <> ''"),
+    ];
+}
+
+function rsm_dashboard_closing_buckets(array $closingStatuses): array
+{
+    $registrasi = [];
+    $herregistrasi = [];
+    foreach ($closingStatuses as $status) {
+        $normalized = strtolower(trim((string) $status));
+        if ($normalized === '') {
+            continue;
+        }
+        $isHer = str_contains($normalized, 'herregistrasi') || str_contains($normalized, 'daftar ulang') || str_contains($normalized, 'her registrasi');
+        $isRegistration = $isHer
+            || str_contains($normalized, 'closing')
+            || str_contains($normalized, 'daftar')
+            || str_contains($normalized, 'registrasi')
+            || str_contains($normalized, 'terdaftar');
+        if ($isRegistration) {
+            $registrasi[] = $normalized;
+        }
+        if ($isHer) {
+            $herregistrasi[] = $normalized;
+        }
+    }
+
+    return [
+        'registrasi' => array_values(array_unique($registrasi)),
+        'herregistrasi' => array_values(array_unique($herregistrasi)),
+    ];
+}
+
+function rsm_dashboard_in_condition(string $column, array $values): array
+{
+    if ($values === []) {
+        return ['0', []];
+    }
+    return [
+        'LOWER(TRIM(COALESCE(' . $column . ', \'\'))) IN (' . implode(',', array_fill(0, count($values), '?')) . ')',
+        array_values($values),
+    ];
+}
+
+function rsm_dashboard_overview(string $area, array $filters, ?array $user = null): array
+{
+    $statusMap = rsm_dashboard_status_map($area, $filters, $user);
+    $buckets = rsm_dashboard_closing_buckets($statusMap['closing_status']);
+    [$registrasiCondition, $registrasiParams] = rsm_dashboard_in_condition('closing_status', $buckets['registrasi']);
+    [$herregistrasiCondition, $herregistrasiParams] = rsm_dashboard_in_condition('closing_status', $buckets['herregistrasi']);
+    [$filterSql, $filterParams] = rsm_dashboard_filter_sql($filters, 'r');
+    [$scopeSql, $scopeParams] = rsm_report_scope_sql($user, 'r');
+    $baseParams = array_merge($registrasiParams, $herregistrasiParams, [$area], $filterParams, $scopeParams);
+
+    $leadAggregateSql = "
+        SELECT
+            report_id,
+            COUNT(*) AS detail_leads,
+            SUM(CASE WHEN COALESCE(follow_up_result, '') <> '' OR COALESCE(progress_status, '') <> '' THEN 1 ELSE 0 END) AS detail_follow_up,
+            SUM(CASE WHEN {$registrasiCondition} THEN 1 ELSE 0 END) AS detail_registrasi,
+            SUM(CASE WHEN {$herregistrasiCondition} THEN 1 ELSE 0 END) AS detail_herregistrasi
+        FROM rsm_ad_leads
+        GROUP BY report_id
+    ";
+
+    $stmt = rsm_pdo()->prepare(
+        "SELECT
+            COUNT(*) AS report_count,
+            COALESCE(SUM(CASE WHEN COALESCE(la.detail_leads, 0) > 0 THEN la.detail_leads ELSE r.leads_count END), 0) AS leads_total,
+            COALESCE(SUM(CASE WHEN COALESCE(la.detail_leads, 0) > 0 THEN la.detail_follow_up ELSE 0 END), 0) AS follow_up_total,
+            COALESCE(SUM(CASE WHEN COALESCE(la.detail_leads, 0) > 0 THEN la.detail_registrasi ELSE r.closing_count END), 0) AS registrasi_total,
+            COALESCE(SUM(CASE WHEN COALESCE(la.detail_leads, 0) > 0 THEN la.detail_herregistrasi ELSE 0 END), 0) AS herregistrasi_total,
+            COALESCE(SUM(CASE WHEN r.report_type = 'ads' AND COALESCE(la.detail_leads, 0) > 0 THEN la.detail_leads WHEN r.report_type = 'ads' THEN r.leads_count ELSE 0 END), 0) AS ads_leads,
+            COALESCE(SUM(CASE WHEN r.report_type = 'ads' AND COALESCE(la.detail_leads, 0) > 0 THEN la.detail_registrasi WHEN r.report_type = 'ads' THEN r.closing_count ELSE 0 END), 0) AS ads_registrasi,
+            COALESCE(SUM(CASE WHEN r.report_type = 'ads' THEN r.budget_requested ELSE 0 END), 0) AS budget_requested,
+            COALESCE(SUM(CASE WHEN r.report_type = 'ads' THEN r.budget_approved ELSE 0 END), 0) AS budget_approved,
+            COALESCE(SUM(CASE WHEN r.report_type = 'ads' THEN r.realization_amount ELSE 0 END), 0) AS spend_total
+         FROM rsm_reports r
+         LEFT JOIN ({$leadAggregateSql}) la ON la.report_id = r.id
+         WHERE r.area = ? {$filterSql} {$scopeSql}"
+    );
+    $stmt->execute($baseParams);
+    $summary = $stmt->fetch() ?: [];
+
+    $rankingStmt = rsm_pdo()->prepare(
+        "SELECT
+            CASE WHEN r.partner_campus_id IS NOT NULL THEN CONCAT('campus:', r.partner_campus_id) ELSE CONCAT('unit:', r.unit_name) END AS ranking_key,
+            MAX(r.partner_campus_id) AS partner_campus_id,
+            COALESCE(NULLIF(MAX(pc.display_name), ''), NULLIF(MAX(pc.name), ''), r.unit_name) AS unit_label,
+            COALESCE(SUM(CASE WHEN COALESCE(la.detail_leads, 0) > 0 THEN la.detail_leads ELSE r.leads_count END), 0) AS leads_total,
+            COALESCE(SUM(CASE WHEN COALESCE(la.detail_leads, 0) > 0 THEN la.detail_registrasi ELSE r.closing_count END), 0) AS registrasi_total,
+            COALESCE(SUM(CASE WHEN COALESCE(la.detail_leads, 0) > 0 THEN la.detail_herregistrasi ELSE 0 END), 0) AS herregistrasi_total,
+            COALESCE(SUM(CASE WHEN r.report_type = 'ads' THEN r.realization_amount ELSE 0 END), 0) AS spend_total
+         FROM rsm_reports r
+         LEFT JOIN partner_campuses pc ON pc.id = r.partner_campus_id
+         LEFT JOIN ({$leadAggregateSql}) la ON la.report_id = r.id
+         WHERE r.area = ? {$filterSql} {$scopeSql}
+         GROUP BY ranking_key, r.unit_name
+         ORDER BY registrasi_total DESC, leads_total DESC, unit_label ASC
+         LIMIT 10"
+    );
+    $rankingStmt->execute($baseParams);
+    $ranking = array_map(static function (array $row): array {
+        $leads = (float) ($row['leads_total'] ?? 0);
+        $registrasi = (float) ($row['registrasi_total'] ?? 0);
+        $spend = (float) ($row['spend_total'] ?? 0);
+        $row['conversion_rate'] = rsm_dashboard_percent($registrasi, $leads);
+        $row['cpl'] = rsm_dashboard_divide($spend, $leads);
+        $row['cost_per_registrasi'] = rsm_dashboard_divide($spend, $registrasi);
+        return $row;
+    }, $rankingStmt->fetchAll());
+
+    $dailyStmt = rsm_pdo()->prepare(
+        "SELECT report_date, report_type, wilayah, unit_name, staff_name, category, title, result_text, obstacle_text, follow_up_text, status
+         FROM rsm_reports r
+         WHERE r.area = ? {$filterSql} {$scopeSql}
+         ORDER BY r.report_date DESC, r.id DESC
+         LIMIT 10"
+    );
+    $dailyStmt->execute(array_merge([$area], $filterParams, $scopeParams));
+
+    $leads = (float) ($summary['leads_total'] ?? 0);
+    $followUp = (float) ($summary['follow_up_total'] ?? 0);
+    $registrasi = (float) ($summary['registrasi_total'] ?? 0);
+    $herregistrasi = (float) ($summary['herregistrasi_total'] ?? 0);
+    $adsLeads = (float) ($summary['ads_leads'] ?? 0);
+    $adsRegistrasi = (float) ($summary['ads_registrasi'] ?? 0);
+    $spend = (float) ($summary['spend_total'] ?? 0);
+
+    return [
+        'status_map' => $statusMap,
+        'status_buckets' => $buckets,
+        'kpi' => [
+            'leads' => $leads,
+            'follow_up' => $followUp,
+            'registrasi' => $registrasi,
+            'herregistrasi' => $herregistrasi,
+            'conversion_rate' => rsm_dashboard_percent($registrasi, $leads),
+        ],
+        'funnel' => [
+            ['label' => 'Leads', 'value' => $leads, 'rate' => 100.0],
+            ['label' => 'Follow Up', 'value' => $followUp, 'rate' => rsm_dashboard_percent($followUp, $leads)],
+            ['label' => 'Registrasi', 'value' => $registrasi, 'rate' => rsm_dashboard_percent($registrasi, $leads)],
+            ['label' => 'Herregistrasi', 'value' => $herregistrasi, 'rate' => rsm_dashboard_percent($herregistrasi, $leads)],
+        ],
+        'budget' => [
+            'requested' => (float) ($summary['budget_requested'] ?? 0),
+            'approved' => (float) ($summary['budget_approved'] ?? 0),
+            'spend' => $spend,
+            'remaining' => (float) ($summary['budget_approved'] ?? 0) - $spend,
+            'ads_leads' => $adsLeads,
+            'ads_registrasi' => $adsRegistrasi,
+            'cpl' => rsm_dashboard_divide($spend, $adsLeads),
+            'cost_per_registrasi' => rsm_dashboard_divide($spend, $adsRegistrasi),
+        ],
+        'ranking' => $ranking,
+        'daily_reports' => $dailyStmt->fetchAll(),
+    ];
+}
+
 function rsm_summary(string $area, ?array $user = null): array
 {
     [$scopeSql, $scopeParams] = rsm_report_scope_sql($user);

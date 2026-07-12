@@ -919,6 +919,7 @@ function render_gamification_panel(array $gamification): void
         <?php if (is_array($myRank)): ?>
           <strong><?= h(number_format((float) ($myRank['points'] ?? 0), 0, ',', '.')) ?> poin</strong>
           <small>Rank #<?= h((string) ($myRank['rank'] ?? '-')) ?> - <?= h((string) ($myRank['staff_label'] ?? '-')) ?></small>
+          <small>Closing acuan: <?= h(number_format((float) ($myRank['closing_for_points'] ?? 0), 0, ',', '.')) ?> dari <?= h((string) ($myRank['closing_points_source'] ?? 'RSM fallback')) ?></small>
           <div class="badge-row">
             <?php foreach (($myRank['badges'] ?? []) as $badge): ?>
               <b class="game-badge badge-tone-<?= h((string) ($badge['tone'] ?? 'slate')) ?>"><?= h((string) ($badge['label'] ?? 'Badge')) ?></b>
@@ -966,7 +967,7 @@ function render_gamification_panel(array $gamification): void
           </div>
           <div class="leader-metrics">
             <b><?= h(number_format((float) ($row['points'] ?? 0), 0, ',', '.')) ?> poin</b>
-            <small><?= h(number_format((float) ($row['registrasi_total'] ?? 0), 0, ',', '.')) ?> registrasi - <?= h(percent_label((float) ($row['conversion_rate'] ?? 0))) ?></small>
+            <small><?= h(number_format((float) ($row['closing_for_points'] ?? 0), 0, ',', '.')) ?> closing - <?= h((string) ($row['closing_points_source'] ?? 'RSM fallback')) ?></small>
           </div>
           <div class="badge-row compact">
             <?php foreach (array_slice(($row['badges'] ?? []), 0, 2) as $badge): ?>

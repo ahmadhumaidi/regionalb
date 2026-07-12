@@ -1449,6 +1449,12 @@ function rsm_dashboard_divide(float $part, float $whole): float
     return $whole > 0 ? $part / $whole : 0.0;
 }
 
+function rsm_number_value(mixed $value): float
+{
+    $normalized = str_replace(',', '.', trim((string) $value));
+    return is_numeric($normalized) ? (float) $normalized : 0.0;
+}
+
 function rsm_dashboard_status_map(string $area, array $filters, ?array $user): array
 {
     [$filterSql, $filterParams] = rsm_dashboard_filter_sql($filters, 'r');
@@ -1653,6 +1659,123 @@ function rsm_gamification_badges_for(array $row): array
     return $badges ?: [['label' => 'On Progress', 'tone' => 'slate']];
 }
 
+function rsm_collab_history_path(): ?string
+{
+    $candidates = [
+        getenv('RSM_COLLAB_HISTORY_PATH') ?: '',
+        __DIR__ . '/../source_portal/rsm/storage/report-history.json',
+        __DIR__ . '/../../source_portal/rsm/storage/report-history.json',
+        __DIR__ . '/../../../source_portal/rsm/storage/report-history.json',
+    ];
+
+    foreach ($candidates as $candidate) {
+        if ($candidate !== '' && is_file($candidate)) {
+            return $candidate;
+        }
+    }
+
+    return null;
+}
+
+function rsm_collab_report_from_history(string $reportName): array
+{
+    $path = rsm_collab_history_path();
+    if ($path === null) {
+        return [];
+    }
+
+    $decoded = json_decode((string) file_get_contents($path), true);
+    if (!is_array($decoded)) {
+        return [];
+    }
+
+    foreach ($decoded as $historyEntry) {
+        foreach (($historyEntry['reports'] ?? []) as $report) {
+            if (($report['name'] ?? '') === $reportName && !empty($report['tables'][0]) && is_array($report['tables'][0])) {
+                return $report;
+            }
+        }
+    }
+
+    return [];
+}
+
+function rsm_collab_day_indexes(array $headerRow): array
+{
+    $dayIndexes = [];
+    $totalIndex = null;
+    foreach ($headerRow as $index => $label) {
+        $label = trim((string) $label);
+        if (preg_match('/^\d{1,2}$/', $label)) {
+            $dayIndexes[] = (int) $index;
+            continue;
+        }
+        if (strtolower($label) === 'total') {
+            $totalIndex = (int) $index;
+        }
+    }
+
+    return [$dayIndexes, $totalIndex];
+}
+
+function rsm_collab_staff_totals(string $reportName, array $filters): array
+{
+    $report = rsm_collab_report_from_history($reportName);
+    $rows = $report['tables'][0] ?? [];
+    if (!is_array($rows) || count($rows) < 3) {
+        return [];
+    }
+
+    [$dayIndexes, $totalIndex] = rsm_collab_day_indexes($rows[1] ?? []);
+    if ($totalIndex === null && $dayIndexes !== []) {
+        $totalIndex = max($dayIndexes) + 1;
+    }
+
+    if ($totalIndex === null) {
+        return [];
+    }
+
+    $targetDay = 0;
+    if (($filters['date_from'] ?? '') !== '' && ($filters['date_from'] ?? '') === ($filters['date_to'] ?? '')) {
+        $targetDay = (int) date('j', strtotime((string) $filters['date_from']));
+    }
+    $dayIndex = $targetDay > 0 ? array_values(array_filter($dayIndexes, static fn (int $index): bool => trim((string) ($rows[1][$index] ?? '')) === str_pad((string) $targetDay, 2, '0', STR_PAD_LEFT)))[0] ?? null : null;
+    $valueIndex = $dayIndex ?? $totalIndex;
+
+    $totals = [];
+    foreach ($rows as $index => $row) {
+        if ($index < 2 || !is_array($row)) {
+            continue;
+        }
+
+        $regional = trim((string) ($row[0] ?? ''));
+        $staffNik = trim((string) ($row[3] ?? ''));
+        $staffName = trim((string) ($row[4] ?? ''));
+        if ($staffName === '' || !preg_match('/^[1-7]$/', $regional)) {
+            continue;
+        }
+
+        $value = rsm_number_value($row[$valueIndex] ?? 0);
+        $keys = array_values(array_unique([
+            rsm_username_from_nik_or_name($staffNik !== '' ? $staffNik : null, $staffName),
+            rsm_username_from_nik_or_name(null, $staffName),
+        ]));
+        foreach ($keys as $key) {
+            if (!isset($totals[$key])) {
+                $totals[$key] = [
+                    'nik' => $staffNik,
+                    'name' => $staffName,
+                    'regional' => 'Regional ' . $regional,
+                    'value' => 0.0,
+                ];
+            }
+            $totals[$key]['value'] += $value;
+        }
+    }
+
+    return $totals;
+}
+
 function rsm_gamification_summary(string $area, array $filters, ?array $user = null): array
 {
     $statusMap = rsm_dashboard_status_map($area, $filters, $user);
@@ -1697,22 +1820,38 @@ function rsm_gamification_summary(string $area, array $filters, ?array $user = n
     );
 
     $stmt->execute(array_merge($registrasiParams, $herregistrasiParams, [$area], $filterParams, $scopeParams));
+    $closingCollab = rsm_collab_staff_totals('Closing Collab', $filters);
+    $herregCollab = rsm_collab_staff_totals('Herreg Collab', $filters);
+    $usesCollabClosing = $closingCollab !== [];
     $rows = array_map(static function (array $row): array {
+        return $row;
+    }, $stmt->fetchAll());
+
+    $rows = array_map(static function (array $row) use ($closingCollab, $herregCollab, $usesCollabClosing): array {
+        $staffKey = rsm_username_from_nik_or_name(null, (string) ($row['staff_label'] ?? ''));
+        $collabClosing = (float) ($closingCollab[$staffKey]['value'] ?? 0);
+        $collabHerreg = (float) ($herregCollab[$staffKey]['value'] ?? 0);
+        $closingForPoints = $usesCollabClosing ? $collabClosing : (float) ($row['registrasi_total'] ?? 0);
+        $herregForPoints = $herregCollab !== [] ? $collabHerreg : (float) ($row['herregistrasi_total'] ?? 0);
+
         $points =
             ((int) ($row['report_total'] ?? 0) * 5)
             + ((int) ($row['approved_reports'] ?? 0) * 10)
             + ((int) ($row['leads_total'] ?? 0) * 2)
             + ((int) ($row['follow_up_total'] ?? 0) * 4)
-            + ((int) ($row['registrasi_total'] ?? 0) * 20)
-            + ((int) ($row['herregistrasi_total'] ?? 0) * 35)
+            + ((int) $closingForPoints * 20)
+            + ((int) $herregForPoints * 35)
             + ((int) ($row['uploaded_ad_reports'] ?? 0) * 10)
             + ((int) ($row['complete_follow_up_notes'] ?? 0) * 5);
 
         $row['points'] = $points;
+        $row['closing_points_source'] = $usesCollabClosing ? 'Closing Collab' : 'RSM fallback';
+        $row['closing_for_points'] = $closingForPoints;
+        $row['herreg_for_points'] = $herregForPoints;
         $row['conversion_rate'] = rsm_dashboard_percent((float) ($row['registrasi_total'] ?? 0), (float) ($row['leads_total'] ?? 0));
         $row['badges'] = rsm_gamification_badges_for($row);
         return $row;
-    }, $stmt->fetchAll());
+    }, $rows);
 
     usort($rows, static fn (array $a, array $b): int => ((int) $b['points'] <=> (int) $a['points']) ?: strcmp((string) $a['staff_label'], (string) $b['staff_label']));
     $topRows = array_slice($rows, 0, 5);

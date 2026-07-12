@@ -1631,6 +1631,126 @@ function rsm_dashboard_overview(string $area, array $filters, ?array $user = nul
     ];
 }
 
+function rsm_gamification_badges_for(array $row): array
+{
+    $badges = [];
+    if ((int) ($row['follow_up_total'] ?? 0) >= 10) {
+        $badges[] = ['label' => 'Follow Up Hero', 'tone' => 'blue'];
+    }
+    if ((int) ($row['registrasi_total'] ?? 0) >= 3) {
+        $badges[] = ['label' => 'Closing Hunter', 'tone' => 'green'];
+    }
+    if ((int) ($row['herregistrasi_total'] ?? 0) >= 1) {
+        $badges[] = ['label' => 'Herregistrasi Champion', 'tone' => 'purple'];
+    }
+    if ((int) ($row['report_days'] ?? 0) >= 5) {
+        $badges[] = ['label' => 'Consistency Streak', 'tone' => 'amber'];
+    }
+    if ((float) ($row['spend_total'] ?? 0) > 0 && (float) ($row['registrasi_total'] ?? 0) > 0) {
+        $badges[] = ['label' => 'Budget Efficient', 'tone' => 'cyan'];
+    }
+
+    return $badges ?: [['label' => 'On Progress', 'tone' => 'slate']];
+}
+
+function rsm_gamification_summary(string $area, array $filters, ?array $user = null): array
+{
+    $statusMap = rsm_dashboard_status_map($area, $filters, $user);
+    $buckets = rsm_dashboard_closing_buckets($statusMap['closing_status']);
+    [$registrasiCondition, $registrasiParams] = rsm_dashboard_in_condition('closing_status', $buckets['registrasi']);
+    [$herregistrasiCondition, $herregistrasiParams] = rsm_dashboard_in_condition('closing_status', $buckets['herregistrasi']);
+    [$filterSql, $filterParams] = rsm_dashboard_filter_sql($filters, 'r');
+    [$scopeSql, $scopeParams] = rsm_report_scope_sql($user, 'r');
+
+    $leadAggregateSql = "
+        SELECT
+            report_id,
+            COUNT(*) AS detail_leads,
+            SUM(CASE WHEN COALESCE(follow_up_result, '') <> '' OR COALESCE(progress_status, '') <> '' THEN 1 ELSE 0 END) AS detail_follow_up,
+            SUM(CASE WHEN {$registrasiCondition} THEN 1 ELSE 0 END) AS detail_registrasi,
+            SUM(CASE WHEN {$herregistrasiCondition} THEN 1 ELSE 0 END) AS detail_herregistrasi
+        FROM rsm_ad_leads
+        GROUP BY report_id
+    ";
+
+    $stmt = rsm_pdo()->prepare(
+        "SELECT
+            COALESCE(r.user_id, 0) AS user_id,
+            COALESCE(NULLIF(r.staff_name, ''), NULLIF(r.created_by_name, ''), 'Staff Unit') AS staff_label,
+            MAX(r.wilayah) AS wilayah,
+            MAX(r.unit_name) AS unit_name,
+            COUNT(*) AS report_total,
+            COUNT(DISTINCT r.report_date) AS report_days,
+            SUM(CASE WHEN r.status IN ('Diverifikasi','Disetujui','Disetujui Senior Manager','Selesai','Berjalan') THEN 1 ELSE 0 END) AS approved_reports,
+            COALESCE(SUM(CASE WHEN COALESCE(la.detail_leads, 0) > 0 THEN la.detail_leads ELSE r.leads_count END), 0) AS leads_total,
+            COALESCE(SUM(CASE WHEN COALESCE(la.detail_leads, 0) > 0 THEN la.detail_follow_up ELSE 0 END), 0) AS follow_up_total,
+            COALESCE(SUM(CASE WHEN COALESCE(la.detail_leads, 0) > 0 THEN la.detail_registrasi ELSE r.closing_count END), 0) AS registrasi_total,
+            COALESCE(SUM(CASE WHEN COALESCE(la.detail_leads, 0) > 0 THEN la.detail_herregistrasi ELSE 0 END), 0) AS herregistrasi_total,
+            COALESCE(SUM(CASE WHEN r.report_type = 'ads' THEN r.realization_amount ELSE 0 END), 0) AS spend_total,
+            SUM(CASE WHEN COALESCE(la.detail_leads, 0) > 0 THEN 1 ELSE 0 END) AS uploaded_ad_reports,
+            SUM(CASE WHEN COALESCE(r.obstacle_text, '') <> '' AND COALESCE(r.follow_up_text, '') <> '' THEN 1 ELSE 0 END) AS complete_follow_up_notes
+         FROM rsm_reports r
+         LEFT JOIN ({$leadAggregateSql}) la ON la.report_id = r.id
+         WHERE r.area = ? {$filterSql} {$scopeSql}
+         GROUP BY COALESCE(r.user_id, 0), staff_label
+         ORDER BY staff_label ASC"
+    );
+
+    $stmt->execute(array_merge($registrasiParams, $herregistrasiParams, [$area], $filterParams, $scopeParams));
+    $rows = array_map(static function (array $row): array {
+        $points =
+            ((int) ($row['report_total'] ?? 0) * 5)
+            + ((int) ($row['approved_reports'] ?? 0) * 10)
+            + ((int) ($row['leads_total'] ?? 0) * 2)
+            + ((int) ($row['follow_up_total'] ?? 0) * 4)
+            + ((int) ($row['registrasi_total'] ?? 0) * 20)
+            + ((int) ($row['herregistrasi_total'] ?? 0) * 35)
+            + ((int) ($row['uploaded_ad_reports'] ?? 0) * 10)
+            + ((int) ($row['complete_follow_up_notes'] ?? 0) * 5);
+
+        $row['points'] = $points;
+        $row['conversion_rate'] = rsm_dashboard_percent((float) ($row['registrasi_total'] ?? 0), (float) ($row['leads_total'] ?? 0));
+        $row['badges'] = rsm_gamification_badges_for($row);
+        return $row;
+    }, $stmt->fetchAll());
+
+    usort($rows, static fn (array $a, array $b): int => ((int) $b['points'] <=> (int) $a['points']) ?: strcmp((string) $a['staff_label'], (string) $b['staff_label']));
+    $topRows = array_slice($rows, 0, 5);
+
+    $currentName = (string) ($user['name'] ?? '');
+    $currentUserId = (int) ($user['id'] ?? 0);
+    $myRank = null;
+    foreach ($rows as $index => $row) {
+        if (($currentUserId > 0 && (int) ($row['user_id'] ?? 0) === $currentUserId) || ($currentName !== '' && (string) ($row['staff_label'] ?? '') === $currentName)) {
+            $myRank = $row + ['rank' => $index + 1];
+            break;
+        }
+    }
+
+    return [
+        'leaderboard' => $topRows,
+        'my_rank' => $myRank,
+        'challenge' => [
+            'title' => 'Challenge Bulan Ini',
+            'items' => [
+                'Kumpulkan 50 follow up valid',
+                'Raih 10 registrasi',
+                'Input laporan harian konsisten',
+                'Jaga CPL dan cost per registrasi tetap efisien',
+            ],
+        ],
+        'point_rules' => [
+            'Laporan harian +5',
+            'Laporan tervalidasi +10',
+            'Lead +2',
+            'Follow up +4',
+            'Registrasi +20',
+            'Herregistrasi +35',
+            'Upload data iklan +10',
+        ],
+    ];
+}
+
 function rsm_summary(string $area, ?array $user = null): array
 {
     [$scopeSql, $scopeParams] = rsm_report_scope_sql($user);

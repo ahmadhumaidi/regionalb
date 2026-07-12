@@ -117,6 +117,12 @@ $dashboardOverview = [
     'ranking' => [],
     'daily_reports' => [],
 ];
+$gamification = [
+    'leaderboard' => [],
+    'my_rank' => null,
+    'challenge' => ['title' => 'Challenge Bulan Ini', 'items' => []],
+    'point_rules' => [],
+];
 $references = [
     'regionals' => [],
     'staff' => [],
@@ -178,6 +184,7 @@ try {
     $otherActivities = rsm_reports($area, 'other', 50, $authUser);
     $logs = rsm_logs($area, 20, $authUser);
     $dashboardOverview = rsm_dashboard_overview($area, $dashboardFilters, $authUser);
+    $gamification = rsm_gamification_summary($area, $dashboardFilters, $authUser);
     if ($page === 'users' && ($authUser['role'] ?? '') === 'senior') {
         $managedUsers = rsm_users($area);
     }
@@ -333,6 +340,11 @@ $summaryCards = [
               <div><span>Cost / Registrasi</span><strong><?= h(money_idr((float) $dashboardOverview['budget']['cost_per_registrasi'])) ?></strong></div>
             </div>
           </article>
+        </section>
+
+        <section class="panel game-panel">
+          <div class="panel-head"><h2>Arena Performa Staff</h2><span>Poin, badge, dan challenge dari data existing</span></div>
+          <?php render_gamification_panel($gamification); ?>
         </section>
 
         <section class="panel">
@@ -893,6 +905,76 @@ function render_status_mapping_panel(array $statusMap, array $buckets): void
     <div class="mapping-note">
       <strong>Registrasi:</strong> <?= h($buckets['registrasi'] ? implode(', ', $buckets['registrasi']) : 'Belum ada status detail yang bisa dipetakan') ?>.
       <strong>Herregistrasi:</strong> <?= h($buckets['herregistrasi'] ? implode(', ', $buckets['herregistrasi']) : 'Belum ada status eksplisit herregistrasi') ?>.
+    </div>
+    <?php
+}
+
+function render_gamification_panel(array $gamification): void
+{
+    $myRank = $gamification['my_rank'] ?? null;
+    ?>
+    <div class="game-grid">
+      <div class="game-card my-score-card">
+        <span>Poin Saya</span>
+        <?php if (is_array($myRank)): ?>
+          <strong><?= h(number_format((float) ($myRank['points'] ?? 0), 0, ',', '.')) ?> pts</strong>
+          <small>Rank #<?= h((string) ($myRank['rank'] ?? '-')) ?> - <?= h((string) ($myRank['staff_label'] ?? '-')) ?></small>
+          <div class="badge-row">
+            <?php foreach (($myRank['badges'] ?? []) as $badge): ?>
+              <b class="game-badge badge-tone-<?= h((string) ($badge['tone'] ?? 'slate')) ?>"><?= h((string) ($badge['label'] ?? 'Badge')) ?></b>
+            <?php endforeach; ?>
+          </div>
+        <?php else: ?>
+          <strong>0 pts</strong>
+          <small>Belum ada poin pada periode ini</small>
+        <?php endif; ?>
+      </div>
+
+      <div class="game-card challenge-card">
+        <span><?= h((string) ($gamification['challenge']['title'] ?? 'Challenge')) ?></span>
+        <ul>
+          <?php foreach (($gamification['challenge']['items'] ?? []) as $item): ?>
+            <li><?= h((string) $item) ?></li>
+          <?php endforeach; ?>
+        </ul>
+      </div>
+
+      <div class="game-card rules-card">
+        <span>Aturan Poin</span>
+        <div class="rule-list">
+          <?php foreach (($gamification['point_rules'] ?? []) as $rule): ?>
+            <b><?= h((string) $rule) ?></b>
+          <?php endforeach; ?>
+        </div>
+      </div>
+    </div>
+
+    <div class="leaderboard">
+      <div class="leaderboard-head">
+        <strong>Top Performer Bulan Ini</strong>
+        <span>Ranking berdasarkan poin kualitas dan hasil</span>
+      </div>
+      <?php if (empty($gamification['leaderboard'])): ?>
+        <div class="empty-game">Belum ada poin leaderboard pada periode/filter ini.</div>
+      <?php endif; ?>
+      <?php foreach (($gamification['leaderboard'] ?? []) as $index => $row): ?>
+        <div class="leaderboard-row rank-<?= h((string) min(3, $index + 1)) ?>">
+          <div class="rank-medal"><?= h((string) ($index + 1)) ?></div>
+          <div class="leader-info">
+            <strong><?= h((string) ($row['staff_label'] ?? '-')) ?></strong>
+            <span><?= h((string) (($row['wilayah'] ?? '') ?: '-')) ?> - <?= h((string) (($row['unit_name'] ?? '') ?: '-')) ?></span>
+          </div>
+          <div class="leader-metrics">
+            <b><?= h(number_format((float) ($row['points'] ?? 0), 0, ',', '.')) ?> pts</b>
+            <small><?= h(number_format((float) ($row['registrasi_total'] ?? 0), 0, ',', '.')) ?> registrasi - <?= h(percent_label((float) ($row['conversion_rate'] ?? 0))) ?></small>
+          </div>
+          <div class="badge-row compact">
+            <?php foreach (array_slice(($row['badges'] ?? []), 0, 2) as $badge): ?>
+              <b class="game-badge badge-tone-<?= h((string) ($badge['tone'] ?? 'slate')) ?>"><?= h((string) ($badge['label'] ?? 'Badge')) ?></b>
+            <?php endforeach; ?>
+          </div>
+        </div>
+      <?php endforeach; ?>
     </div>
     <?php
 }

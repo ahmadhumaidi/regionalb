@@ -618,6 +618,163 @@ textarea {
   line-height: 1.6;
 }
 
+.game-panel {
+  overflow: hidden;
+}
+
+.game-grid {
+  display: grid;
+  grid-template-columns: .85fr 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.game-card {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 156px;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #f8fbff;
+}
+
+.game-card span {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.my-score-card strong {
+  font-size: 32px;
+  line-height: 1;
+}
+
+.game-card small,
+.leader-info span,
+.leader-metrics small,
+.leaderboard-head span {
+  color: var(--muted);
+}
+
+.challenge-card ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.challenge-card li {
+  line-height: 1.35;
+}
+
+.rule-list,
+.badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.rule-list b {
+  padding: 7px 9px;
+  border-radius: 999px;
+  color: #334155;
+  background: #e2e8f0;
+  font-size: 12px;
+}
+
+.game-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 7px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.badge-tone-blue { color: #1d4ed8; background: #dbeafe; }
+.badge-tone-green { color: #166534; background: #dcfce7; }
+.badge-tone-purple { color: #6d28d9; background: #ede9fe; }
+.badge-tone-amber { color: #92400e; background: #fef3c7; }
+.badge-tone-cyan { color: #0e7490; background: #cffafe; }
+.badge-tone-slate { color: #475569; background: #e2e8f0; }
+
+.leaderboard {
+  display: grid;
+  gap: 10px;
+}
+
+.leaderboard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.leaderboard-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) minmax(150px, auto) minmax(170px, auto);
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.rank-medal {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: #64748b;
+  font-weight: 900;
+}
+
+.rank-1 .rank-medal { background: #d97706; }
+.rank-2 .rank-medal { background: #64748b; }
+.rank-3 .rank-medal { background: #b45309; }
+
+.leader-info,
+.leader-metrics {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.leader-info strong,
+.leader-info span {
+  overflow-wrap: anywhere;
+}
+
+.leader-metrics {
+  text-align: right;
+}
+
+.leader-metrics b {
+  font-size: 18px;
+}
+
+.badge-row.compact {
+  justify-content: flex-end;
+}
+
+.empty-game {
+  padding: 18px;
+  border: 1px dashed #bfdbfe;
+  border-radius: 14px;
+  color: var(--muted);
+  background: #eff6ff;
+  text-align: center;
+  font-weight: 800;
+}
+
 .table-wrap {
   overflow: auto;
 }
@@ -923,8 +1080,20 @@ th {
   }
 
   .dashboard-filter,
-  .status-map-grid {
+  .status-map-grid,
+  .game-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .leaderboard-row {
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  .leader-metrics,
+  .badge-row.compact {
+    grid-column: 2;
+    justify-content: flex-start;
+    text-align: left;
   }
 }
 
@@ -953,8 +1122,28 @@ th {
   .role-grid,
   .detail-grid,
   .status-map-grid,
-  .compact-metrics {
+  .compact-metrics,
+  .game-grid {
     grid-template-columns: 1fr;
+  }
+
+  .leaderboard-head,
+  .leaderboard-row {
+    align-items: stretch;
+  }
+
+  .leaderboard-head {
+    flex-direction: column;
+  }
+
+  .leaderboard-row {
+    grid-template-columns: 1fr;
+  }
+
+  .rank-medal,
+  .leader-metrics,
+  .badge-row.compact {
+    grid-column: auto;
   }
 
   .data-form .wide {

@@ -213,6 +213,14 @@ $summaryCards = [
     ['label' => 'Conversion Rate', 'value' => percent_label((float) $dashboardOverview['kpi']['conversion_rate']), 'tone' => 'amber', 'note' => 'Registrasi dibagi leads'],
     ['label' => 'Target PMB', 'value' => 'Belum diatur', 'tone' => 'slate', 'note' => 'Phase 1 belum membuat tabel target'],
 ];
+$registrationRecap = [
+    'leads' => (float) $dashboardOverview['kpi']['leads'],
+    'registrasi' => (float) $dashboardOverview['kpi']['registrasi'],
+    'herregistrasi' => (float) $dashboardOverview['kpi']['herregistrasi'],
+    'conversion_rate' => (float) $dashboardOverview['kpi']['conversion_rate'],
+    'cost_per_registrasi' => (float) $dashboardOverview['budget']['cost_per_registrasi'],
+    'top_units' => array_slice($dashboardOverview['ranking'], 0, 3),
+];
 ?><!doctype html>
 <html lang="id">
 <head>
@@ -315,6 +323,45 @@ $summaryCards = [
           <label><span>Status</span><select name="status"><option value="">Semua Status</option><?php foreach ($dashboardOverview['status_map']['status'] as $statusOption): ?><option value="<?= h((string) $statusOption) ?>"<?= selected_attr((string) $dashboardFilters['status'], (string) $statusOption) ?>><?= h((string) $statusOption) ?></option><?php endforeach; ?></select></label>
           <div class="filter-actions"><button class="primary-btn">Terapkan</button><a class="secondary-btn" href="<?= h(url_for('dashboard', $role)) ?>">Reset</a></div>
         </form>
+
+        <section class="panel registration-recap-panel">
+          <div class="panel-head">
+            <h2>Rekap Pencapaian Registrasi</h2>
+            <span>Ringkasan hasil PMB dari filter aktif</span>
+          </div>
+          <div class="registration-recap-grid">
+            <div class="registration-hero">
+              <span>Total Registrasi</span>
+              <strong><?= h(number_format($registrationRecap['registrasi'], 0, ',', '.')) ?></strong>
+              <small>Target belum diatur</small>
+              <div class="registration-progress">
+                <i style="width: <?= h((string) max(3, min(100, $registrationRecap['conversion_rate']))) ?>%"></i>
+              </div>
+              <p><?= h(percent_label($registrationRecap['conversion_rate'])) ?> conversion dari <?= h(number_format($registrationRecap['leads'], 0, ',', '.')) ?> leads</p>
+            </div>
+            <div class="registration-stat-list">
+              <div><span>Leads Masuk</span><strong><?= h(number_format($registrationRecap['leads'], 0, ',', '.')) ?></strong></div>
+              <div><span>Herregistrasi</span><strong><?= h(number_format($registrationRecap['herregistrasi'], 0, ',', '.')) ?></strong></div>
+              <div><span>Cost / Registrasi</span><strong><?= h(money_idr($registrationRecap['cost_per_registrasi'])) ?></strong></div>
+            </div>
+            <div class="registration-top-units">
+              <div class="registration-subhead">
+                <strong>Top Unit/Kampus</strong>
+                <span>berdasarkan registrasi</span>
+              </div>
+              <?php if (!$registrationRecap['top_units']): ?>
+                <p class="muted">Belum ada registrasi pada periode/filter ini.</p>
+              <?php endif; ?>
+              <?php foreach ($registrationRecap['top_units'] as $index => $unit): ?>
+                <div class="registration-unit-row">
+                  <b>#<?= h((string) ($index + 1)) ?></b>
+                  <span><?= h((string) (($unit['unit_label'] ?? '') ?: '-')) ?></span>
+                  <strong><?= h(number_format((float) ($unit['registrasi_total'] ?? 0), 0, ',', '.')) ?></strong>
+                </div>
+              <?php endforeach; ?>
+            </div>
+          </div>
+        </section>
 
         <section class="dashboard-grid">
           <article class="panel funnel-panel">

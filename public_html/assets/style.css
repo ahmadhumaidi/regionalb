@@ -570,6 +570,135 @@ textarea {
   line-height: 1.2;
 }
 
+.registration-recap-panel {
+  border-color: #bbf7d0;
+  background:
+    linear-gradient(135deg, rgba(240, 253, 244, 0.96), rgba(255, 255, 255, 0.98) 48%, rgba(239, 246, 255, 0.96));
+}
+
+.registration-recap-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, .95fr) minmax(220px, .85fr) minmax(260px, 1fr);
+  gap: 14px;
+}
+
+.registration-hero,
+.registration-stat-list div,
+.registration-top-units {
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .78);
+}
+
+.registration-hero {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 190px;
+  padding: 18px;
+}
+
+.registration-hero span,
+.registration-stat-list span,
+.registration-subhead span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.registration-hero strong {
+  color: #15803d;
+  font-size: clamp(42px, 7vw, 64px);
+  line-height: .98;
+}
+
+.registration-hero small {
+  width: fit-content;
+  padding: 6px 9px;
+  border-radius: 999px;
+  color: #166534;
+  background: #dcfce7;
+  font-weight: 900;
+}
+
+.registration-hero p {
+  margin: 0;
+  color: #334155;
+  font-weight: 800;
+}
+
+.registration-progress {
+  overflow: hidden;
+  height: 10px;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.registration-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--green), var(--blue));
+}
+
+.registration-stat-list {
+  display: grid;
+  gap: 10px;
+}
+
+.registration-stat-list div {
+  display: grid;
+  gap: 7px;
+  min-height: 56px;
+  padding: 14px;
+}
+
+.registration-stat-list strong {
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.registration-top-units {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 14px;
+}
+
+.registration-subhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.registration-unit-row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.registration-unit-row b {
+  color: var(--green);
+}
+
+.registration-unit-row span {
+  overflow: hidden;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.registration-unit-row strong {
+  min-width: 34px;
+  text-align: right;
+}
+
 .status-map-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1081,6 +1210,7 @@ th {
 
   .dashboard-filter,
   .status-map-grid,
+  .registration-recap-grid,
   .game-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1123,6 +1253,7 @@ th {
   .detail-grid,
   .status-map-grid,
   .compact-metrics,
+  .registration-recap-grid,
   .game-grid {
     grid-template-columns: 1fr;
   }

@@ -940,19 +940,25 @@ function render_collab_source_note(array $sources): void
 {
     $registrasi = $sources['registrasi'] ?? [];
     $herregistrasi = $sources['herregistrasi'] ?? [];
+    $registrasiMode = (string) ($registrasi['mode'] ?? '');
+    $herregistrasiMode = (string) ($herregistrasi['mode'] ?? '');
+    $registrasiTimeLabel = str_starts_with($registrasiMode, 'live_url') ? 'Jam baca' : 'Jam snapshot';
+    $herregistrasiTimeLabel = str_starts_with($herregistrasiMode, 'live_url') ? 'Jam baca' : 'Jam snapshot';
     ?>
     <div class="source-note-grid">
       <div>
         <span>Registrasi</span>
         <strong><?= h((string) ($registrasi['label'] ?? 'Closing Collab')) ?></strong>
         <small><?= h((string) ($registrasi['url'] ?? 'https://cb.web.id/pencapaian_closing_collab_template.php')) ?></small>
-        <?php if (!empty($registrasi['month']) || !empty($registrasi['mode'])): ?><em><?= h(trim((string) ($registrasi['month'] ?? '') . ' ' . (string) ($registrasi['mode'] ?? ''))) ?></em><?php endif; ?>
+        <?php if (!empty($registrasi['month']) || !empty($registrasi['mode'])): ?><em><?= h(trim((string) ($registrasi['month'] ?? '') . ' ' . $registrasiMode)) ?></em><?php endif; ?>
+        <?php if (!empty($registrasi['time'])): ?><small><?= h($registrasiTimeLabel) ?>: <?= h((string) $registrasi['time']) ?></small><?php endif; ?>
       </div>
       <div>
         <span>Herregistrasi</span>
         <strong><?= h((string) ($herregistrasi['label'] ?? 'Herreg Collab')) ?></strong>
         <small><?= h((string) ($herregistrasi['url'] ?? 'https://cb.web.id/pencapaian_herreg_collab_template.php')) ?></small>
-        <?php if (!empty($herregistrasi['month']) || !empty($herregistrasi['mode'])): ?><em><?= h(trim((string) ($herregistrasi['month'] ?? '') . ' ' . (string) ($herregistrasi['mode'] ?? ''))) ?></em><?php endif; ?>
+        <?php if (!empty($herregistrasi['month']) || !empty($herregistrasi['mode'])): ?><em><?= h(trim((string) ($herregistrasi['month'] ?? '') . ' ' . $herregistrasiMode)) ?></em><?php endif; ?>
+        <?php if (!empty($herregistrasi['time'])): ?><small><?= h($herregistrasiTimeLabel) ?>: <?= h((string) $herregistrasi['time']) ?></small><?php endif; ?>
       </div>
     </div>
     <?php

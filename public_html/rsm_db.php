@@ -1861,6 +1861,7 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
                 'source_url' => rsm_collab_source_url($reportName),
                 'source_mode' => 'unreadable',
                 'report_month' => '',
+                'source_time' => '',
             ],
         ];
     }
@@ -1871,6 +1872,7 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
                 'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
                 'source_mode' => (string) ($report['source_mode'] ?? 'unknown') . '_month_mismatch',
                 'report_month' => $reportMonth,
+                'source_time' => (string) ($report['created_at'] ?? ''),
             ],
         ];
     }
@@ -1886,6 +1888,7 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
                 'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
                 'source_mode' => (string) ($report['source_mode'] ?? 'unknown') . '_no_total',
                 'report_month' => $reportMonth,
+                'source_time' => (string) ($report['created_at'] ?? ''),
             ],
         ];
     }
@@ -1945,6 +1948,7 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
                     'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
                     'source_mode' => (string) ($report['source_mode'] ?? 'unknown'),
                     'report_month' => $reportMonth,
+                    'source_time' => (string) ($report['created_at'] ?? ''),
                 ];
             }
             $totals[$key]['value'] += $value;
@@ -1955,6 +1959,7 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
         'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
         'source_mode' => (string) ($report['source_mode'] ?? 'unknown'),
         'report_month' => $reportMonth,
+        'source_time' => (string) ($report['created_at'] ?? ''),
     ];
     return $totals;
 }
@@ -2024,12 +2029,14 @@ function rsm_collab_staff_performance(string $area, array $filters, ?array $user
                 'url' => rsm_collab_source_url('Closing Collab'),
                 'mode' => (string) ($closingMeta['source_mode'] ?? ''),
                 'month' => (string) ($closingMeta['report_month'] ?? ''),
+                'time' => (string) ($closingMeta['source_time'] ?? ''),
             ],
             'herregistrasi' => [
                 'label' => $herreg !== [] ? 'Herreg Collab' : 'Belum terbaca',
                 'url' => rsm_collab_source_url('Herreg Collab'),
                 'mode' => (string) ($herregMeta['source_mode'] ?? ''),
                 'month' => (string) ($herregMeta['report_month'] ?? ''),
+                'time' => (string) ($herregMeta['source_time'] ?? ''),
             ],
         ],
     ];

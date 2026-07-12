@@ -205,21 +205,30 @@ try {
 
 $latestActivities = array_slice($activities, 0, 8);
 
+$displayLeads = (float) $dashboardOverview['kpi']['leads'];
+$displayRegistrasi = ($gamification['collab_totals']['closing'] ?? null) !== null ? (float) $gamification['collab_totals']['closing'] : (float) $dashboardOverview['kpi']['registrasi'];
+$displayHerregistrasi = ($gamification['collab_totals']['herregistrasi'] ?? null) !== null ? (float) $gamification['collab_totals']['herregistrasi'] : (float) $dashboardOverview['kpi']['herregistrasi'];
+$displayConversionRate = rsm_dashboard_percent($displayRegistrasi, $displayLeads);
+$displayCostPerRegistrasi = rsm_dashboard_divide((float) $dashboardOverview['budget']['spend'], $displayRegistrasi);
+$displayRegistrationSource = (string) ($gamification['sources']['closing'] ?? 'RSM fallback');
+$displayHerregistrationSource = (string) ($gamification['sources']['herregistrasi'] ?? 'RSM fallback');
+
 $summaryCards = [
     ['label' => 'Leads', 'value' => number_format((float) $dashboardOverview['kpi']['leads'], 0, ',', '.'), 'tone' => 'blue', 'note' => 'Target belum diatur'],
     ['label' => 'Follow Up', 'value' => number_format((float) $dashboardOverview['kpi']['follow_up'], 0, ',', '.'), 'tone' => 'cyan', 'note' => 'Dari detail lead yang sudah ditindaklanjuti'],
-    ['label' => 'Registrasi', 'value' => number_format((float) $dashboardOverview['kpi']['registrasi'], 0, ',', '.'), 'tone' => 'green', 'note' => 'Mengikuti mapping status aktual'],
-    ['label' => 'Herregistrasi', 'value' => number_format((float) $dashboardOverview['kpi']['herregistrasi'], 0, ',', '.'), 'tone' => 'purple', 'note' => 'Hanya status eksplisit herregistrasi'],
-    ['label' => 'Conversion Rate', 'value' => percent_label((float) $dashboardOverview['kpi']['conversion_rate']), 'tone' => 'amber', 'note' => 'Registrasi dibagi leads'],
+    ['label' => 'Registrasi', 'value' => number_format($displayRegistrasi, 0, ',', '.'), 'tone' => 'green', 'note' => 'Acuan: ' . $displayRegistrationSource],
+    ['label' => 'Herregistrasi', 'value' => number_format($displayHerregistrasi, 0, ',', '.'), 'tone' => 'purple', 'note' => 'Acuan: ' . $displayHerregistrationSource],
+    ['label' => 'Conversion Rate', 'value' => percent_label($displayConversionRate), 'tone' => 'amber', 'note' => 'Registrasi dibagi leads'],
     ['label' => 'Target PMB', 'value' => 'Belum diatur', 'tone' => 'slate', 'note' => 'Phase 1 belum membuat tabel target'],
 ];
 $registrationRecap = [
-    'leads' => (float) $dashboardOverview['kpi']['leads'],
-    'registrasi' => (float) $dashboardOverview['kpi']['registrasi'],
-    'herregistrasi' => ($gamification['collab_totals']['herregistrasi'] ?? null) !== null ? (float) $gamification['collab_totals']['herregistrasi'] : (float) $dashboardOverview['kpi']['herregistrasi'],
-    'herregistrasi_source' => (string) ($gamification['sources']['herregistrasi'] ?? 'RSM fallback'),
-    'conversion_rate' => (float) $dashboardOverview['kpi']['conversion_rate'],
-    'cost_per_registrasi' => (float) $dashboardOverview['budget']['cost_per_registrasi'],
+    'leads' => $displayLeads,
+    'registrasi' => $displayRegistrasi,
+    'registrasi_source' => $displayRegistrationSource,
+    'herregistrasi' => $displayHerregistrasi,
+    'herregistrasi_source' => $displayHerregistrationSource,
+    'conversion_rate' => $displayConversionRate,
+    'cost_per_registrasi' => $displayCostPerRegistrasi,
     'top_units' => array_slice($dashboardOverview['ranking'], 0, 3),
 ];
 ?><!doctype html>
@@ -334,7 +343,7 @@ $registrationRecap = [
             <div class="registration-hero">
               <span>Total Registrasi</span>
               <strong><?= h(number_format($registrationRecap['registrasi'], 0, ',', '.')) ?></strong>
-              <small>Target belum diatur</small>
+              <small>Acuan: <?= h($registrationRecap['registrasi_source']) ?></small>
               <div class="registration-progress">
                 <i style="width: <?= h((string) max(3, min(100, $registrationRecap['conversion_rate']))) ?>%"></i>
               </div>

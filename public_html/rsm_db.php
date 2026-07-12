@@ -1718,7 +1718,7 @@ function rsm_collab_day_indexes(array $headerRow): array
     return [$dayIndexes, $totalIndex];
 }
 
-function rsm_collab_staff_totals(string $reportName, array $filters): array
+function rsm_collab_staff_totals(string $reportName, array $filters, string $area = 'Regional', ?array $user = null): array
 {
     $report = rsm_collab_report_from_history($reportName);
     $rows = $report['tables'][0] ?? [];
@@ -1741,6 +1741,23 @@ function rsm_collab_staff_totals(string $reportName, array $filters): array
     }
     $dayIndex = $targetDay > 0 ? array_values(array_filter($dayIndexes, static fn (int $index): bool => trim((string) ($rows[1][$index] ?? '')) === str_pad((string) $targetDay, 2, '0', STR_PAD_LEFT)))[0] ?? null : null;
     $valueIndex = $dayIndex ?? $totalIndex;
+    $allowedRegionals = rsm_area_regionals($area);
+    $filterRegional = (string) ($filters['wilayah'] ?? '');
+    $filterStaff = (string) ($filters['staff_name'] ?? '');
+    if ($filterRegional !== '') {
+        $allowedRegionals = [$filterRegional];
+    }
+    if (($user['role'] ?? '') === 'koordinator' && !empty($user['regional'])) {
+        $allowedRegionals = [(string) $user['regional']];
+    }
+    if (($user['role'] ?? '') === 'staff') {
+        if (!empty($user['regional'])) {
+            $allowedRegionals = [(string) $user['regional']];
+        }
+        if ($filterStaff === '' && !empty($user['name'])) {
+            $filterStaff = (string) $user['name'];
+        }
+    }
 
     $totals = [];
     foreach ($rows as $index => $row) {
@@ -1752,6 +1769,12 @@ function rsm_collab_staff_totals(string $reportName, array $filters): array
         $staffNik = trim((string) ($row[3] ?? ''));
         $staffName = trim((string) ($row[4] ?? ''));
         if ($staffName === '' || !preg_match('/^[1-7]$/', $regional)) {
+            continue;
+        }
+        if ($allowedRegionals !== [] && !in_array('Regional ' . $regional, $allowedRegionals, true)) {
+            continue;
+        }
+        if ($filterStaff !== '' && strcasecmp($staffName, $filterStaff) !== 0) {
             continue;
         }
 
@@ -1820,8 +1843,8 @@ function rsm_gamification_summary(string $area, array $filters, ?array $user = n
     );
 
     $stmt->execute(array_merge($registrasiParams, $herregistrasiParams, [$area], $filterParams, $scopeParams));
-    $closingCollab = rsm_collab_staff_totals('Closing Collab', $filters);
-    $herregCollab = rsm_collab_staff_totals('Herreg Collab', $filters);
+    $closingCollab = rsm_collab_staff_totals('Closing Collab', $filters, $area, $user);
+    $herregCollab = rsm_collab_staff_totals('Herreg Collab', $filters, $area, $user);
     $usesCollabClosing = $closingCollab !== [];
     $usesCollabHerreg = $herregCollab !== [];
     $rows = array_map(static function (array $row): array {

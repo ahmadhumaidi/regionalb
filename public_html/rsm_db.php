@@ -1718,11 +1718,26 @@ function rsm_collab_day_indexes(array $headerRow): array
     return [$dayIndexes, $totalIndex];
 }
 
+function rsm_collab_report_month(array $rows): string
+{
+    $label = trim((string) ($rows[0][3] ?? ''));
+    if ($label === '') {
+        return '';
+    }
+
+    $timestamp = strtotime('1 ' . $label);
+    return $timestamp ? date('Y-m', $timestamp) : '';
+}
+
 function rsm_collab_staff_totals(string $reportName, array $filters, string $area = 'Regional', ?array $user = null): array
 {
     $report = rsm_collab_report_from_history($reportName);
     $rows = $report['tables'][0] ?? [];
     if (!is_array($rows) || count($rows) < 3) {
+        return [];
+    }
+    $reportMonth = rsm_collab_report_month($rows);
+    if ($reportMonth !== '' && ($filters['month'] ?? '') !== '' && $reportMonth !== (string) $filters['month']) {
         return [];
     }
 

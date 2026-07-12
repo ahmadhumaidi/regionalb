@@ -1391,8 +1391,8 @@ function rsm_dashboard_filters_from_request(array $input): array
     $dateTo = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($input['date_to'] ?? '')) ? (string) $input['date_to'] : '';
 
     if ($dateFrom === '' && $dateTo === '') {
-        $dateFrom = $month . '-01';
-        $dateTo = date('Y-m-t', strtotime($dateFrom));
+        $dateFrom = date('Y-m-d');
+        $dateTo = $dateFrom;
     } elseif ($dateFrom !== '' && $dateTo === '') {
         $dateTo = $dateFrom;
     } elseif ($dateFrom === '' && $dateTo !== '') {

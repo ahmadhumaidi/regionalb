@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/rsm_db.php';
+require_once __DIR__ . '/rsm_profile_gamification.php';
 
 $area = isset($area) ? (string) $area : 'Regional';
 $areaScope = isset($areaScope) ? (string) $areaScope : 'Semua wilayah';
@@ -136,6 +137,7 @@ $references = [
     'staff' => [],
     'campuses' => [],
 ];
+$profileData = null;
 
 try {
     rsm_ensure_schema();
@@ -192,11 +194,18 @@ try {
     $ads = rsm_reports($area, 'ads', 50, $authUser);
     $otherActivities = rsm_reports($area, 'other', 50, $authUser);
     $logs = rsm_logs($area, 20, $authUser);
-    $dashboardOverview = rsm_dashboard_overview($area, $dashboardFilters, $authUser);
-    $gamification = rsm_gamification_summary($area, $dashboardFilters, $authUser);
-    $staffAchievement = rsm_collab_staff_performance($area, $dashboardFilters, $authUser);
+    if ($page === 'dashboard') {
+        $dashboardOverview = rsm_dashboard_overview($area, $dashboardFilters, $authUser);
+        $gamification = rsm_gamification_summary($area, $dashboardFilters, $authUser);
+        $staffAchievement = rsm_collab_staff_performance($area, $dashboardFilters, $authUser);
+    } elseif ($page === 'pencapaian') {
+        $staffAchievement = rsm_collab_staff_performance($area, $dashboardFilters, $authUser);
+    }
     if ($page === 'users' && ($authUser['role'] ?? '') === 'senior') {
         $managedUsers = rsm_users($area);
+    }
+    if ($page === 'profile') {
+        $profileData = rsm_profile_gamification($area, $authUser, (int) ($_GET['user_id'] ?? 0));
     }
     if ($page === 'detail') {
         $detailReport = rsm_report($area, (int) ($_GET['id'] ?? 0), $authUser);
@@ -257,6 +266,7 @@ $registrationRecap = [
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title><?= h($pageTitles[$page]) ?> - <?= h($area) ?></title>
   <link rel="stylesheet" href="assets/style.css">
+  <?php if ($page === 'profile'): ?><link rel="stylesheet" href="assets/profile.css"><?php endif; ?>
 </head>
 <body>
   <div class="app-shell">
@@ -628,7 +638,7 @@ $registrationRecap = [
           </form>
         </section>
       <?php elseif ($page === 'profile'): ?>
-        <?php render_profile_page($authUser); ?>
+        <?php render_profile_page($profileData ?: ['target' => $authUser, 'allowed_users' => [], 'stats' => [], 'level' => [], 'xp' => 0, 'league' => 'Starter', 'status_performa' => 'Belum ada data', 'joined_label' => '-', 'streak' => ['current' => 0, 'longest' => 0], 'competencies' => [], 'badges' => [], 'kpis' => [], 'activities' => [], 'history' => [], 'score' => 0], $authUser, $role); ?>
       <?php elseif ($page === 'users' && ($authUser['role'] ?? '') === 'senior'): ?>
         <section class="panel form-panel">
           <div class="panel-head">
@@ -720,43 +730,185 @@ function render_login_page(?string $error): void
     <?php
 }
 
-function render_profile_page(?array $user): void
+function render_profile_page(array $profile, array $authUser, string $role): void
 {
+    $user = $profile['target'] ?? $authUser;
     $photoPath = trim((string) ($user['photo_path'] ?? ''));
     $initial = strtoupper(substr((string) ($user['name'] ?? 'U'), 0, 1));
+    $level = $profile['level'] ?? ['number' => 1, 'progress' => 0, 'remaining' => 0, 'next_min' => 200];
+    $stats = $profile['stats'] ?? [];
+    $xp = (int) ($profile['xp'] ?? 0);
+    $score = (int) ($profile['score'] ?? 0);
+    $isOwnProfile = (int) ($user['id'] ?? 0) === (int) ($authUser['id'] ?? 0);
+    $allowedUsers = $profile['allowed_users'] ?? [];
+    $circle = max(0, min(100, (float) ($level['progress'] ?? 0)));
     ?>
-    <section class="panel profile-panel">
-      <div class="panel-head">
-        <div>
-          <h2>Profil Saya</h2>
-          <span>Lengkapi biodata singkat dan foto agar identitas tim lebih mudah dikenali</span>
+    <section class="profile-game-shell">
+      <aside class="profile-game-sidebar">
+        <div class="profile-avatar-xl">
+          <?php if ($photoPath !== ''): ?>
+            <img src="<?= h($photoPath) ?>" alt="Foto profil <?= h((string) ($user['name'] ?? 'User')) ?>">
+          <?php else: ?>
+            <span><?= h($initial) ?></span>
+          <?php endif; ?>
         </div>
-      </div>
-      <div class="profile-layout">
-        <aside class="profile-preview">
-          <div class="profile-photo">
-            <?php if ($photoPath !== ''): ?>
-              <img src="<?= h($photoPath) ?>" alt="Foto profil <?= h((string) ($user['name'] ?? 'User')) ?>">
-            <?php else: ?>
-              <span><?= h($initial) ?></span>
-            <?php endif; ?>
+        <strong><?= h((string) ($user['name'] ?? '-')) ?></strong>
+        <small><?= h((string) (($user['username'] ?? '') ?: ('ID #' . (int) ($user['id'] ?? 0)))) ?></small>
+        <div class="profile-meta-list">
+          <span><?= h(ucfirst((string) ($user['role'] ?? '-'))) ?></span>
+          <span><?= h((string) (($user['campus_name'] ?? '') ?: 'Unit belum diatur')) ?></span>
+          <span><?= h((string) (($user['regional'] ?? '') ?: 'Wilayah belum diatur')) ?></span>
+        </div>
+        <div class="profile-level-card">
+          <div><span>Level</span><strong><?= h((string) ($level['number'] ?? 1)) ?></strong></div>
+          <div><span>XP</span><strong><?= h(number_format($xp, 0, ',', '.')) ?></strong></div>
+          <div class="profile-xp-bar"><i style="width: <?= h((string) $circle) ?>%"></i></div>
+          <small><?= h(number_format((int) ($level['remaining'] ?? 0), 0, ',', '.')) ?> XP menuju level berikutnya</small>
+        </div>
+        <nav class="profile-section-menu">
+          <a href="#ringkasan">Ringkasan</a>
+          <a href="#misi">Misi</a>
+          <a href="#kompetensi">Kompetensi</a>
+          <a href="#pencapaian">Pencapaian</a>
+          <a href="#aktivitas">Aktivitas</a>
+          <a href="#pengaturan">Pengaturan Profil</a>
+        </nav>
+      </aside>
+
+      <div class="profile-game-content">
+        <?php if (count($allowedUsers) > 1): ?>
+          <form class="profile-user-switch" method="get">
+            <input type="hidden" name="page" value="profile">
+            <?php if (count($GLOBALS['allowedRoleKeys'] ?? []) > 1): ?><input type="hidden" name="role" value="<?= h($role) ?>"><?php endif; ?>
+            <label><span>Lihat profil user</span><select name="user_id" onchange="this.form.submit()">
+              <?php foreach ($allowedUsers as $option): ?>
+                <option value="<?= h((string) ($option['id'] ?? 0)) ?>" <?= (int) ($option['id'] ?? 0) === (int) ($user['id'] ?? 0) ? 'selected' : '' ?>><?= h((string) ($option['name'] ?? '-')) ?> - <?= h((string) ($option['regional'] ?? '-')) ?></option>
+              <?php endforeach; ?>
+            </select></label>
+          </form>
+        <?php endif; ?>
+
+        <section class="profile-stat-header" id="ringkasan">
+          <article><span>Rank/League</span><strong><?= h((string) ($profile['league'] ?? 'Starter')) ?></strong><small>Berbasis XP, closing, dan konsistensi</small></article>
+          <article><span>Lama Bergabung</span><strong><?= h((string) ($profile['joined_label'] ?? '-')) ?></strong><small>Sejak akun dibuat</small></article>
+          <article><span>Status Performa</span><strong><?= h((string) ($profile['status_performa'] ?? 'Belum ada data')) ?></strong><small>Skor saat ini <?= h((string) $score) ?>/100</small></article>
+        </section>
+
+        <section class="profile-hero-card">
+          <div class="profile-hero-copy">
+            <span class="eyebrow">Profil User</span>
+            <h2><?= h((string) ($user['name'] ?? '-')) ?></h2>
+            <p><?= h((string) (($user['bio_text'] ?? '') ?: 'Biodata singkat belum diisi.')) ?></p>
+            <div class="profile-identity-tags">
+              <span><?= h((string) ($user['jabatan'] ?? '-')) ?></span>
+              <span><?= h((string) (($user['campus_name'] ?? '') ?: 'Unit belum diatur')) ?></span>
+              <span><?= h((string) (($user['regional'] ?? '') ?: 'Wilayah belum diatur')) ?></span>
+            </div>
           </div>
-          <strong><?= h((string) ($user['name'] ?? '-')) ?></strong>
-          <small><?= h((string) ($user['jabatan'] ?? '-')) ?></small>
-          <p><?= h((string) (($user['regional'] ?? '') ?: ($user['area'] ?? '-'))) ?></p>
-        </aside>
-        <form class="data-form profile-form" method="post" enctype="multipart/form-data">
-          <input type="hidden" name="action" value="update_profile">
-          <label><span>Nama</span><input class="locked-input" value="<?= h((string) ($user['name'] ?? '-')) ?>" readonly></label>
-          <label><span>NIK</span><input class="locked-input" value="<?= h((string) (($user['nik'] ?? '') ?: '-')) ?>" readonly></label>
-          <label><span>Username</span><input class="locked-input" value="<?= h((string) ($user['username'] ?? '-')) ?>" readonly></label>
-          <label><span>Jabatan</span><input class="locked-input" value="<?= h((string) ($user['jabatan'] ?? '-')) ?>" readonly></label>
-          <label><span>Wilayah</span><input class="locked-input" value="<?= h((string) (($user['regional'] ?? '') ?: '-')) ?>" readonly></label>
-          <label><span>Unit/Kampus</span><input class="locked-input" value="<?= h((string) (($user['campus_name'] ?? '') ?: '-')) ?>" readonly></label>
-          <label class="form-full"><span>Biodata singkat</span><textarea name="bio_text" rows="5" maxlength="800" placeholder="Ceritakan singkat peran, fokus kerja, atau target PMB kamu."><?= h((string) ($user['bio_text'] ?? '')) ?></textarea></label>
-          <label class="form-full"><span>Foto profil</span><input type="file" name="profile_photo" accept="image/jpeg,image/png,image/webp"><small class="field-hint">Format JPG, PNG, atau WEBP. Maksimal 2 MB.</small></label>
-          <div class="form-actions form-full"><button class="primary-btn">Simpan Profil</button></div>
-        </form>
+          <div class="profile-radial" style="--value: <?= h((string) $circle) ?>">
+            <div><strong><?= h((string) ($level['number'] ?? 1)) ?></strong><span>Level</span></div>
+          </div>
+          <div class="profile-core-metrics">
+            <div><span>Aktivitas</span><strong><?= h(number_format((int) ($stats['total_reports'] ?? 0), 0, ',', '.')) ?></strong></div>
+            <div><span>Konsistensi</span><strong><?= h(number_format((int) (($profile['streak']['current'] ?? 0)), 0, ',', '.')) ?> hari</strong></div>
+            <div><span>Konversi</span><strong><?= h(percent_label(rsm_dashboard_percent((float) ($stats['closing_total'] ?? 0), (float) ($stats['leads_total'] ?? 0)))) ?></strong></div>
+          </div>
+        </section>
+
+        <section class="profile-metric-grid">
+          <article><span>Total kegiatan</span><strong><?= h(number_format((int) ($stats['total_reports'] ?? 0), 0, ',', '.')) ?></strong></article>
+          <article><span>Total leads</span><strong><?= h(number_format((int) ($stats['leads_total'] ?? 0), 0, ',', '.')) ?></strong></article>
+          <article><span>Total closing</span><strong><?= h(number_format((int) ($stats['closing_total'] ?? 0), 0, ',', '.')) ?></strong></article>
+          <article><span>Hari aktif</span><strong><?= h(number_format((int) ($stats['active_days'] ?? 0), 0, ',', '.')) ?></strong></article>
+          <article><span>Streak laporan</span><strong><?= h(number_format((int) ($profile['streak']['current'] ?? 0), 0, ',', '.')) ?></strong><small>Longest <?= h(number_format((int) ($profile['streak']['longest'] ?? 0), 0, ',', '.')) ?> hari</small></article>
+          <article><span>Badge terbuka</span><strong><?= h(number_format(count(array_filter($profile['badges'] ?? [], static fn (array $badge): bool => (bool) ($badge['unlocked'] ?? false))), 0, ',', '.')) ?></strong></article>
+        </section>
+
+        <section class="profile-two-col" id="misi">
+          <div class="panel profile-section-card">
+            <div class="panel-head"><h2>KPI Personal</h2><span>Target belum diatur untuk fase ini</span></div>
+            <div class="profile-kpi-list">
+              <?php foreach (($profile['kpis'] ?? []) as $kpi): ?>
+                <div class="profile-kpi-row">
+                  <div><strong><?= h((string) ($kpi['label'] ?? '-')) ?></strong><small>Target belum diatur</small></div>
+                  <span><?= h(number_format((float) ($kpi['value'] ?? 0), 0, ',', '.')) ?></span>
+                  <div class="profile-xp-bar"><i style="width: <?= ((float) ($kpi['value'] ?? 0)) > 0 ? '36' : '0' ?>%"></i></div>
+                  <em><?= h((string) ($kpi['status'] ?? 'Belum mulai')) ?></em>
+                </div>
+              <?php endforeach; ?>
+            </div>
+          </div>
+          <div class="panel profile-section-card" id="kompetensi">
+            <div class="panel-head"><h2>Kompetensi</h2><span>Skor dari data aktual</span></div>
+            <div class="profile-skill-list">
+              <?php foreach (($profile['competencies'] ?? []) as $skill): $skillScore = max(0, min(100, (float) ($skill['score'] ?? 0))); ?>
+                <div><span><?= h((string) ($skill['label'] ?? '-')) ?><b><?= h(number_format($skillScore, 0, ',', '.')) ?></b></span><i><em style="width: <?= h((string) $skillScore) ?>%"></em></i></div>
+              <?php endforeach; ?>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel profile-section-card" id="pencapaian">
+          <div class="panel-head"><h2>Badge dan Achievement</h2><span>Dihitung dinamis, belum disimpan sebagai tabel baru</span></div>
+          <div class="profile-badge-grid">
+            <?php foreach (($profile['badges'] ?? []) as $badge): ?>
+              <article class="<?= !empty($badge['unlocked']) ? 'unlocked' : 'locked' ?>">
+                <b><?= h((string) ($badge['icon'] ?? '*')) ?></b>
+                <strong><?= h((string) ($badge['name'] ?? '-')) ?></strong>
+                <small><?= h((string) ($badge['desc'] ?? '-')) ?></small>
+                <span><?= !empty($badge['unlocked']) ? 'Terbuka' : 'Terkunci' ?></span>
+              </article>
+            <?php endforeach; ?>
+          </div>
+        </section>
+
+        <section class="profile-two-col">
+          <div class="panel profile-section-card">
+            <div class="panel-head"><h2>Riwayat Performa</h2><span>6 bulan terakhir</span></div>
+            <div class="profile-history-chart">
+              <?php $maxHistory = max(1, ...array_map(static fn (array $row): int => max((int) ($row['activities'] ?? 0), (int) ($row['leads'] ?? 0), (int) ($row['closing'] ?? 0), (int) (($row['xp'] ?? 0) / 10)), $profile['history'] ?? [])); ?>
+              <?php foreach (($profile['history'] ?? []) as $row): ?>
+                <div>
+                  <span><?= h((string) ($row['label'] ?? '-')) ?></span>
+                  <i title="Aktivitas"><em style="height: <?= h((string) max(4, (((int) ($row['activities'] ?? 0)) / $maxHistory) * 100)) ?>%"></em></i>
+                  <i title="Leads"><em style="height: <?= h((string) max(4, (((int) ($row['leads'] ?? 0)) / $maxHistory) * 100)) ?>%"></em></i>
+                  <i title="Closing"><em style="height: <?= h((string) max(4, (((int) ($row['closing'] ?? 0)) / $maxHistory) * 100)) ?>%"></em></i>
+                  <small><?= h(number_format((int) ($row['xp'] ?? 0), 0, ',', '.')) ?> XP</small>
+                </div>
+              <?php endforeach; ?>
+            </div>
+          </div>
+          <div class="panel profile-section-card" id="aktivitas">
+            <div class="panel-head"><h2>Aktivitas Terbaru</h2><span>Maksimal 10 laporan</span></div>
+            <div class="profile-activity-list">
+              <?php if (empty($profile['activities'])): ?><p class="muted">Belum ada aktivitas untuk user ini.</p><?php endif; ?>
+              <?php foreach (($profile['activities'] ?? []) as $activity): ?>
+                <article>
+                  <time><?= h((string) ($activity['report_date'] ?? '-')) ?></time>
+                  <strong><?= h((string) ($activity['title'] ?? '-')) ?></strong>
+                  <span><?= h((string) ($activity['report_type'] ?? '-')) ?> - <?= h((string) ($activity['unit_name'] ?? '-')) ?></span>
+                  <small><?= h(number_format((float) ($activity['leads_count'] ?? 0), 0, ',', '.')) ?> leads, <?= h(number_format((float) ($activity['closing_count'] ?? 0), 0, ',', '.')) ?> closing - <?= h((string) ($activity['status'] ?? '-')) ?></small>
+                </article>
+              <?php endforeach; ?>
+            </div>
+          </div>
+        </section>
+
+        <?php if ($isOwnProfile): ?>
+          <section class="panel profile-section-card" id="pengaturan">
+            <div class="panel-head"><h2>Pengaturan Profil</h2><span>Edit biodata singkat dan foto</span></div>
+            <form class="data-form profile-form" method="post" enctype="multipart/form-data">
+              <input type="hidden" name="action" value="update_profile">
+              <label><span>Nama</span><input class="locked-input" value="<?= h((string) ($user['name'] ?? '-')) ?>" readonly></label>
+              <label><span>NIK</span><input class="locked-input" value="<?= h((string) (($user['nik'] ?? '') ?: '-')) ?>" readonly></label>
+              <label><span>Username</span><input class="locked-input" value="<?= h((string) ($user['username'] ?? '-')) ?>" readonly></label>
+              <label><span>Jabatan</span><input class="locked-input" value="<?= h((string) ($user['jabatan'] ?? '-')) ?>" readonly></label>
+              <label class="form-full"><span>Biodata singkat</span><textarea name="bio_text" rows="5" maxlength="800" placeholder="Ceritakan singkat peran, fokus kerja, atau target PMB kamu."><?= h((string) ($user['bio_text'] ?? '')) ?></textarea></label>
+              <label class="form-full"><span>Foto profil</span><input type="file" name="profile_photo" accept="image/jpeg,image/png,image/webp"><small class="field-hint">Format JPG, PNG, atau WEBP. Maksimal 2 MB.</small></label>
+              <div class="form-actions form-full"><button class="primary-btn">Simpan Profil</button></div>
+            </form>
+          </section>
+        <?php endif; ?>
       </div>
     </section>
     <?php

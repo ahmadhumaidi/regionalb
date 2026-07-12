@@ -1711,7 +1711,7 @@ function rsm_collab_source_url(string $reportName): string
 function rsm_collab_report_from_url(string $reportName): array
 {
     $url = rsm_collab_source_url($reportName);
-    if ($url === '' || !class_exists('DOMDocument')) {
+    if ($url === '') {
         return [];
     }
 
@@ -1730,28 +1730,63 @@ function rsm_collab_report_from_url(string $reportName): array
     if (!is_string($html) || trim($html) === '') {
         return [];
     }
-
-    $previous = libxml_use_internal_errors(true);
-    $dom = new DOMDocument();
-    $loaded = $dom->loadHTML($html);
-    libxml_clear_errors();
-    libxml_use_internal_errors($previous);
-    if (!$loaded) {
-        return [];
-    }
+    $html = preg_replace('/<br\s*\/?>/i', "\n", $html) ?? $html;
 
     $tables = [];
-    foreach ($dom->getElementsByTagName('table') as $table) {
-        $rows = [];
-        foreach ($table->getElementsByTagName('tr') as $tr) {
-            $cells = [];
-            foreach ($tr->childNodes as $cell) {
-                if (!in_array(strtolower((string) $cell->nodeName), ['td', 'th'], true)) {
-                    continue;
+    if (class_exists('DOMDocument')) {
+        $previous = libxml_use_internal_errors(true);
+        $dom = new DOMDocument();
+        $loaded = $dom->loadHTML($html);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+        if ($loaded) {
+            foreach ($dom->getElementsByTagName('table') as $table) {
+                $rows = [];
+                foreach ($table->getElementsByTagName('tr') as $tr) {
+                    $cells = [];
+                    foreach ($tr->childNodes as $cell) {
+                        if (!in_array(strtolower((string) $cell->nodeName), ['td', 'th'], true)) {
+                            continue;
+                        }
+                        $cells[] = trim(preg_replace('/\s+/', ' ', (string) $cell->textContent) ?? '');
+                    }
+                    if ($cells !== []) {
+                        $rows[] = $cells;
+                    }
                 }
-                $cells[] = trim(preg_replace('/\s+/', ' ', (string) $cell->textContent) ?? '');
+                if (count($rows) >= 3) {
+                    $tables[] = $rows;
+                }
             }
+        }
+    }
+    if ($tables === [] && preg_match_all('/<tr\b[^>]*>(.*?)<\/tr>/is', $html, $matches)) {
+        $rows = [];
+        foreach ($matches[1] as $rowHtml) {
+            if (!preg_match_all('/<t[dh]\b[^>]*>(.*?)<\/t[dh]>/is', $rowHtml, $cellMatches)) {
+                continue;
+            }
+            $cells = array_map(static function (string $cellHtml): string {
+                return trim(preg_replace('/\s+/', ' ', html_entity_decode(strip_tags($cellHtml), ENT_QUOTES, 'UTF-8')) ?? '');
+            }, $cellMatches[1]);
             if ($cells !== []) {
+                $rows[] = $cells;
+            }
+        }
+        if (count($rows) >= 3) {
+            $tables[] = $rows;
+        }
+    }
+
+    if ($tables === []) {
+        $lines = array_values(array_filter(array_map('trim', preg_split('/\R+/', html_entity_decode(strip_tags($html), ENT_QUOTES, 'UTF-8')) ?: [])));
+        $rows = [];
+        foreach ($lines as $line) {
+            if (!str_contains($line, '|')) {
+                continue;
+            }
+            $cells = array_map('trim', explode('|', $line));
+            if (count($cells) >= 5) {
                 $rows[] = $cells;
             }
         }
@@ -1821,11 +1856,23 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
     $report = rsm_collab_report($reportName);
     $rows = $report['tables'][0] ?? [];
     if (!is_array($rows) || count($rows) < 3) {
-        return [];
+        return [
+            '__meta' => [
+                'source_url' => rsm_collab_source_url($reportName),
+                'source_mode' => 'unreadable',
+                'report_month' => '',
+            ],
+        ];
     }
     $reportMonth = rsm_collab_report_month($rows);
     if ($reportMonth !== '' && ($filters['month'] ?? '') !== '' && $reportMonth !== (string) $filters['month']) {
-        return [];
+        return [
+            '__meta' => [
+                'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
+                'source_mode' => (string) ($report['source_mode'] ?? 'unknown') . '_month_mismatch',
+                'report_month' => $reportMonth,
+            ],
+        ];
     }
 
     [$dayIndexes, $totalIndex] = rsm_collab_day_indexes($rows[1] ?? []);
@@ -1834,7 +1881,13 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
     }
 
     if ($totalIndex === null) {
-        return [];
+        return [
+            '__meta' => [
+                'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
+                'source_mode' => (string) ($report['source_mode'] ?? 'unknown') . '_no_total',
+                'report_month' => $reportMonth,
+            ],
+        ];
     }
 
     $targetDay = 0;
@@ -1881,10 +1934,7 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
         }
 
         $value = rsm_number_value($row[$valueIndex] ?? 0);
-        $keys = array_values(array_unique([
-            rsm_username_from_nik_or_name($staffNik !== '' ? $staffNik : null, $staffName),
-            rsm_username_from_nik_or_name(null, $staffName),
-        ]));
+        $keys = [rsm_username_from_nik_or_name($staffNik !== '' ? $staffNik : null, $staffName)];
         foreach ($keys as $key) {
             if (!isset($totals[$key])) {
                 $totals[$key] = [
@@ -1901,6 +1951,11 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
         }
     }
 
+    $totals['__meta'] = [
+        'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
+        'source_mode' => (string) ($report['source_mode'] ?? 'unknown'),
+        'report_month' => $reportMonth,
+    ];
     return $totals;
 }
 
@@ -1908,6 +1963,9 @@ function rsm_collab_staff_performance(string $area, array $filters, ?array $user
 {
     $closing = rsm_collab_staff_totals('Closing Collab', $filters, $area, $user);
     $herreg = rsm_collab_staff_totals('Herreg Collab', $filters, $area, $user);
+    $closingMeta = $closing['__meta'] ?? [];
+    $herregMeta = $herreg['__meta'] ?? [];
+    unset($closing['__meta'], $herreg['__meta']);
     $keys = array_values(array_unique(array_merge(array_keys($closing), array_keys($herreg))));
     $rows = [];
     foreach ($keys as $key) {
@@ -1952,9 +2010,6 @@ function rsm_collab_staff_performance(string $area, array $filters, ?array $user
 
     ksort($regionalSummary);
 
-    $firstClosing = $closing !== [] ? ($closing[array_key_first($closing)] ?? []) : [];
-    $firstHerreg = $herreg !== [] ? ($herreg[array_key_first($herreg)] ?? []) : [];
-
     return [
         'rows' => $rows,
         'regional_summary' => array_values($regionalSummary),
@@ -1967,14 +2022,14 @@ function rsm_collab_staff_performance(string $area, array $filters, ?array $user
             'registrasi' => [
                 'label' => $closing !== [] ? 'Closing Collab' : 'Belum terbaca',
                 'url' => rsm_collab_source_url('Closing Collab'),
-                'mode' => (string) ($firstClosing['source_mode'] ?? ''),
-                'month' => (string) ($firstClosing['report_month'] ?? ''),
+                'mode' => (string) ($closingMeta['source_mode'] ?? ''),
+                'month' => (string) ($closingMeta['report_month'] ?? ''),
             ],
             'herregistrasi' => [
                 'label' => $herreg !== [] ? 'Herreg Collab' : 'Belum terbaca',
                 'url' => rsm_collab_source_url('Herreg Collab'),
-                'mode' => (string) ($firstHerreg['source_mode'] ?? ''),
-                'month' => (string) ($firstHerreg['report_month'] ?? ''),
+                'mode' => (string) ($herregMeta['source_mode'] ?? ''),
+                'month' => (string) ($herregMeta['report_month'] ?? ''),
             ],
         ],
     ];
@@ -2026,6 +2081,7 @@ function rsm_gamification_summary(string $area, array $filters, ?array $user = n
     $stmt->execute(array_merge($registrasiParams, $herregistrasiParams, [$area], $filterParams, $scopeParams));
     $closingCollab = rsm_collab_staff_totals('Closing Collab', $filters, $area, $user);
     $herregCollab = rsm_collab_staff_totals('Herreg Collab', $filters, $area, $user);
+    unset($closingCollab['__meta'], $herregCollab['__meta']);
     $usesCollabClosing = $closingCollab !== [];
     $usesCollabHerreg = $herregCollab !== [];
     $rows = array_map(static function (array $row): array {

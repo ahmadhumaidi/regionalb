@@ -21,12 +21,13 @@ if (!isset($roles[$role])) {
 
 $menus = [
     'dashboard' => 'Dashboard Utama',
-    'pencapaian' => 'Pencapaian Registrasi',
+    'pencapaian' => 'Pencapaian Staff',
     'kegiatan' => 'Kegiatan Marketing',
     'anggaran' => 'Laporan Iklan',
     'aktivitas' => 'Aktivitas Lain',
     'rekap' => 'Laporan & Rekap',
     'role' => 'User & Role',
+    'profile' => 'Profil Saya',
     'password' => 'Ganti Password',
 ];
 $adminMenus = [
@@ -182,6 +183,7 @@ try {
         $authUser = rsm_auth_user();
     } elseif ($postAction !== 'login') {
         $notice = rsm_handle_post($area, $role);
+        $authUser = rsm_auth_user();
     }
 
     $references = rsm_reference_options($area, $authUser, $role);
@@ -192,9 +194,7 @@ try {
     $logs = rsm_logs($area, 20, $authUser);
     $dashboardOverview = rsm_dashboard_overview($area, $dashboardFilters, $authUser);
     $gamification = rsm_gamification_summary($area, $dashboardFilters, $authUser);
-    if ($page === 'pencapaian') {
-        $staffAchievement = rsm_collab_staff_performance($area, $dashboardFilters, $authUser);
-    }
+    $staffAchievement = rsm_collab_staff_performance($area, $dashboardFilters, $authUser);
     if ($page === 'users' && ($authUser['role'] ?? '') === 'senior') {
         $managedUsers = rsm_users($area);
     }
@@ -216,12 +216,21 @@ try {
 $latestActivities = array_slice($activities, 0, 8);
 
 $displayLeads = (float) $dashboardOverview['kpi']['leads'];
-$displayRegistrasi = ($gamification['collab_totals']['closing'] ?? null) !== null ? (float) $gamification['collab_totals']['closing'] : (float) $dashboardOverview['kpi']['registrasi'];
-$displayHerregistrasi = ($gamification['collab_totals']['herregistrasi'] ?? null) !== null ? (float) $gamification['collab_totals']['herregistrasi'] : (float) $dashboardOverview['kpi']['herregistrasi'];
+$displayRegistrasi = (float) ($staffAchievement['totals']['registrasi'] ?? $dashboardOverview['kpi']['registrasi']);
+$displayHerregistrasi = (float) ($staffAchievement['totals']['herregistrasi'] ?? $dashboardOverview['kpi']['herregistrasi']);
 $displayConversionRate = rsm_dashboard_percent($displayRegistrasi, $displayLeads);
 $displayCostPerRegistrasi = rsm_dashboard_divide((float) $dashboardOverview['budget']['spend'], $displayRegistrasi);
-$displayRegistrationSource = (string) ($gamification['sources']['closing'] ?? 'RSM fallback');
-$displayHerregistrationSource = (string) ($gamification['sources']['herregistrasi'] ?? 'RSM fallback');
+$displayRegistrationSource = (string) (($staffAchievement['sources']['registrasi']['label'] ?? '') ?: 'Closing Collab');
+$displayHerregistrationSource = (string) (($staffAchievement['sources']['herregistrasi']['label'] ?? '') ?: 'Herreg Collab');
+
+$dashboardOverview['kpi']['registrasi'] = $displayRegistrasi;
+$dashboardOverview['kpi']['herregistrasi'] = $displayHerregistrasi;
+$dashboardOverview['kpi']['conversion_rate'] = $displayConversionRate;
+$dashboardOverview['funnel'][2]['value'] = $displayRegistrasi;
+$dashboardOverview['funnel'][2]['rate'] = rsm_dashboard_percent($displayRegistrasi, $displayLeads);
+$dashboardOverview['funnel'][3]['value'] = $displayHerregistrasi;
+$dashboardOverview['funnel'][3]['rate'] = rsm_dashboard_percent($displayHerregistrasi, $displayLeads);
+$dashboardOverview['budget']['cost_per_registrasi'] = $displayCostPerRegistrasi;
 
 $summaryCards = [
     ['label' => 'Leads', 'value' => number_format((float) $dashboardOverview['kpi']['leads'], 0, ',', '.'), 'tone' => 'blue', 'note' => 'Target belum diatur'],
@@ -312,22 +321,11 @@ $registrationRecap = [
       <?php endif; ?>
 
       <?php if ($page === 'dashboard'): ?>
-        <section class="summary-grid">
-          <?php foreach ($summaryCards as $card): ?>
-            <article class="summary-card tone-<?= h($card['tone']) ?>">
-              <span><?= h($card['label']) ?></span>
-              <strong><?= h($card['value']) ?></strong>
-              <small><?= h($card['note']) ?></small>
-            </article>
-          <?php endforeach; ?>
-        </section>
-
         <form class="filter-bar dashboard-filter" method="get">
           <input type="hidden" name="page" value="dashboard">
           <?php if (count($allowedRoleKeys) > 1): ?>
             <input type="hidden" name="role" value="<?= h($role) ?>">
           <?php endif; ?>
-          <label><span>Bulan PMB</span><input type="month" name="month" value="<?= h((string) $dashboardFilters['month']) ?>"></label>
           <label><span>Dari tanggal</span><input type="date" name="date_from" value="<?= h((string) $dashboardFilters['date_from']) ?>"></label>
           <label><span>Sampai tanggal</span><input type="date" name="date_to" value="<?= h((string) $dashboardFilters['date_to']) ?>"></label>
           <?php if (($authUser['role'] ?? '') === 'staff'): ?>
@@ -343,6 +341,16 @@ $registrationRecap = [
           <label><span>Status</span><select name="status"><option value="">Semua Status</option><?php foreach ($dashboardOverview['status_map']['status'] as $statusOption): ?><option value="<?= h((string) $statusOption) ?>"<?= selected_attr((string) $dashboardFilters['status'], (string) $statusOption) ?>><?= h((string) $statusOption) ?></option><?php endforeach; ?></select></label>
           <div class="filter-actions"><button class="primary-btn">Terapkan</button><a class="secondary-btn" href="<?= h(url_for('dashboard', $role)) ?>">Reset</a></div>
         </form>
+
+        <section class="summary-grid">
+          <?php foreach ($summaryCards as $card): ?>
+            <article class="summary-card tone-<?= h($card['tone']) ?>">
+              <span><?= h($card['label']) ?></span>
+              <strong><?= h($card['value']) ?></strong>
+              <small><?= h($card['note']) ?></small>
+            </article>
+          <?php endforeach; ?>
+        </section>
 
         <section class="panel registration-recap-panel">
           <div class="panel-head">
@@ -429,18 +437,11 @@ $registrationRecap = [
           <?php render_status_mapping_panel($dashboardOverview['status_map'], $dashboardOverview['status_buckets']); ?>
         </section>
       <?php elseif ($page === 'pencapaian'): ?>
-        <section class="summary-grid three">
-          <article class="summary-card tone-green"><span>Total Registrasi</span><strong><?= h(number_format((float) $staffAchievement['totals']['registrasi'], 0, ',', '.')) ?></strong><small>Acuan Closing Collab</small></article>
-          <article class="summary-card tone-blue"><span>Staff Terbaca</span><strong><?= h(number_format((float) $staffAchievement['totals']['staff_count'], 0, ',', '.')) ?></strong><small>Dalam scope filter</small></article>
-          <article class="summary-card tone-slate"><span>Sumber Data</span><strong>Closing Collab</strong><small>Registrasi saja</small></article>
-        </section>
-
         <form class="filter-bar dashboard-filter" method="get">
           <input type="hidden" name="page" value="pencapaian">
           <?php if (count($allowedRoleKeys) > 1): ?>
             <input type="hidden" name="role" value="<?= h($role) ?>">
           <?php endif; ?>
-          <label><span>Bulan PMB</span><input type="month" name="month" value="<?= h((string) $dashboardFilters['month']) ?>"></label>
           <label><span>Dari tanggal</span><input type="date" name="date_from" value="<?= h((string) $dashboardFilters['date_from']) ?>"></label>
           <label><span>Sampai tanggal</span><input type="date" name="date_to" value="<?= h((string) $dashboardFilters['date_to']) ?>"></label>
           <?php if (($authUser['role'] ?? '') === 'staff'): ?>
@@ -453,10 +454,17 @@ $registrationRecap = [
           <div class="filter-actions"><button class="primary-btn">Terapkan</button><a class="secondary-btn" href="<?= h(url_for('pencapaian', $role)) ?>">Reset</a></div>
         </form>
 
+        <section class="summary-grid four">
+          <article class="summary-card tone-green"><span>Total Registrasi</span><strong><?= h(number_format((float) $staffAchievement['totals']['registrasi'], 0, ',', '.')) ?></strong><small>Acuan Closing Collab</small></article>
+          <article class="summary-card tone-purple"><span>Total Herregistrasi</span><strong><?= h(number_format((float) $staffAchievement['totals']['herregistrasi'], 1, ',', '.')) ?></strong><small>Acuan Herreg Collab</small></article>
+          <article class="summary-card tone-blue"><span>Staff Terbaca</span><strong><?= h(number_format((float) $staffAchievement['totals']['staff_count'], 0, ',', '.')) ?></strong><small>Dalam scope filter</small></article>
+          <article class="summary-card tone-slate"><span>Sumber Data</span><strong>Collab</strong><small>Closing & Herreg</small></article>
+        </section>
+
         <section class="panel achievement-panel">
           <div class="panel-head">
-            <h2>Pencapaian Registrasi Staff</h2>
-            <span>Sumber live Closing Collab sesuai rentang tanggal aktif</span>
+            <h2>Pencapaian Registrasi & Herregistrasi Staff</h2>
+            <span>Sumber live Closing Collab dan Herreg Collab sesuai rentang tanggal aktif</span>
           </div>
           <?php render_collab_source_note($staffAchievement['sources'] ?? []); ?>
           <?php render_regional_achievement_summary($staffAchievement['regional_summary'] ?? []); ?>
@@ -619,6 +627,8 @@ $registrationRecap = [
             <div class="form-actions"><button class="primary-btn">Simpan Password</button></div>
           </form>
         </section>
+      <?php elseif ($page === 'profile'): ?>
+        <?php render_profile_page($authUser); ?>
       <?php elseif ($page === 'users' && ($authUser['role'] ?? '') === 'senior'): ?>
         <section class="panel form-panel">
           <div class="panel-head">
@@ -707,6 +717,48 @@ function render_login_page(?string $error): void
       </main>
     </body>
     </html>
+    <?php
+}
+
+function render_profile_page(?array $user): void
+{
+    $photoPath = trim((string) ($user['photo_path'] ?? ''));
+    $initial = strtoupper(substr((string) ($user['name'] ?? 'U'), 0, 1));
+    ?>
+    <section class="panel profile-panel">
+      <div class="panel-head">
+        <div>
+          <h2>Profil Saya</h2>
+          <span>Lengkapi biodata singkat dan foto agar identitas tim lebih mudah dikenali</span>
+        </div>
+      </div>
+      <div class="profile-layout">
+        <aside class="profile-preview">
+          <div class="profile-photo">
+            <?php if ($photoPath !== ''): ?>
+              <img src="<?= h($photoPath) ?>" alt="Foto profil <?= h((string) ($user['name'] ?? 'User')) ?>">
+            <?php else: ?>
+              <span><?= h($initial) ?></span>
+            <?php endif; ?>
+          </div>
+          <strong><?= h((string) ($user['name'] ?? '-')) ?></strong>
+          <small><?= h((string) ($user['jabatan'] ?? '-')) ?></small>
+          <p><?= h((string) (($user['regional'] ?? '') ?: ($user['area'] ?? '-'))) ?></p>
+        </aside>
+        <form class="data-form profile-form" method="post" enctype="multipart/form-data">
+          <input type="hidden" name="action" value="update_profile">
+          <label><span>Nama</span><input class="locked-input" value="<?= h((string) ($user['name'] ?? '-')) ?>" readonly></label>
+          <label><span>NIK</span><input class="locked-input" value="<?= h((string) (($user['nik'] ?? '') ?: '-')) ?>" readonly></label>
+          <label><span>Username</span><input class="locked-input" value="<?= h((string) ($user['username'] ?? '-')) ?>" readonly></label>
+          <label><span>Jabatan</span><input class="locked-input" value="<?= h((string) ($user['jabatan'] ?? '-')) ?>" readonly></label>
+          <label><span>Wilayah</span><input class="locked-input" value="<?= h((string) (($user['regional'] ?? '') ?: '-')) ?>" readonly></label>
+          <label><span>Unit/Kampus</span><input class="locked-input" value="<?= h((string) (($user['campus_name'] ?? '') ?: '-')) ?>" readonly></label>
+          <label class="form-full"><span>Biodata singkat</span><textarea name="bio_text" rows="5" maxlength="800" placeholder="Ceritakan singkat peran, fokus kerja, atau target PMB kamu."><?= h((string) ($user['bio_text'] ?? '')) ?></textarea></label>
+          <label class="form-full"><span>Foto profil</span><input type="file" name="profile_photo" accept="image/jpeg,image/png,image/webp"><small class="field-hint">Format JPG, PNG, atau WEBP. Maksimal 2 MB.</small></label>
+          <div class="form-actions form-full"><button class="primary-btn">Simpan Profil</button></div>
+        </form>
+      </div>
+    </section>
     <?php
 }
 
@@ -938,16 +990,24 @@ function report_label_for_type(string $type): string
 function render_collab_source_note(array $sources): void
 {
     $registrasi = $sources['registrasi'] ?? [];
+    $herregistrasi = $sources['herregistrasi'] ?? [];
     $registrasiMode = (string) ($registrasi['mode'] ?? '');
+    $herregistrasiMode = (string) ($herregistrasi['mode'] ?? '');
     $registrasiTimeLabel = str_starts_with($registrasiMode, 'live_url') ? 'Jam baca' : 'Jam snapshot';
+    $herregistrasiTimeLabel = str_starts_with($herregistrasiMode, 'live_url') ? 'Jam baca' : 'Jam snapshot';
     ?>
-    <div class="source-note-grid source-note-single">
+    <div class="source-note-grid">
       <div>
         <span>Sumber registrasi</span>
         <strong><?= h((string) ($registrasi['label'] ?? 'Closing Collab')) ?></strong>
-        <small><?= h((string) ($registrasi['url'] ?? 'https://cb.web.id/pencapaian_closing_collab_template.php')) ?></small>
         <?php if (!empty($registrasi['month']) || !empty($registrasi['mode'])): ?><em><?= h(trim((string) ($registrasi['month'] ?? '') . ' ' . $registrasiMode)) ?></em><?php endif; ?>
         <?php if (!empty($registrasi['time'])): ?><small><?= h($registrasiTimeLabel) ?>: <?= h((string) $registrasi['time']) ?> WIB</small><?php endif; ?>
+      </div>
+      <div>
+        <span>Sumber herregistrasi</span>
+        <strong><?= h((string) ($herregistrasi['label'] ?? 'Herreg Collab')) ?></strong>
+        <?php if (!empty($herregistrasi['month']) || !empty($herregistrasi['mode'])): ?><em><?= h(trim((string) ($herregistrasi['month'] ?? '') . ' ' . $herregistrasiMode)) ?></em><?php endif; ?>
+        <?php if (!empty($herregistrasi['time'])): ?><small><?= h($herregistrasiTimeLabel) ?>: <?= h((string) $herregistrasi['time']) ?> WIB</small><?php endif; ?>
       </div>
     </div>
     <?php
@@ -957,12 +1017,12 @@ function render_regional_achievement_summary(array $rows): void
 {
     ?>
     <div class="regional-achievement-grid">
-      <?php if (!$rows): ?><div class="empty-game">Belum ada data registrasi dari Closing Collab pada filter ini.</div><?php endif; ?>
+      <?php if (!$rows): ?><div class="empty-game">Belum ada data dari source Collab pada filter ini.</div><?php endif; ?>
       <?php foreach ($rows as $row): ?>
         <article>
           <span><?= h((string) ($row['regional'] ?? '-')) ?></span>
           <strong><?= h(number_format((float) ($row['registrasi'] ?? 0), 0, ',', '.')) ?> registrasi</strong>
-          <small><?= h(number_format((float) ($row['staff_count'] ?? 0), 0, ',', '.')) ?> staff terbaca</small>
+          <small><?= h(number_format((float) ($row['herregistrasi'] ?? 0), 1, ',', '.')) ?> herregistrasi</small>
         </article>
       <?php endforeach; ?>
     </div>
@@ -972,14 +1032,15 @@ function render_regional_achievement_summary(array $rows): void
 function render_staff_achievement_table(array $rows): void
 {
     ?>
-    <div class="table-wrap achievement-table"><table><thead><tr><th>Regional</th><th>NIK</th><th>Staff</th><th>Registrasi</th></tr></thead><tbody>
-      <?php if (!$rows): ?><tr><td colspan="4" class="empty-row">Belum ada data staff pada periode/filter ini.</td></tr><?php endif; ?>
+    <div class="table-wrap achievement-table"><table><thead><tr><th>Regional</th><th>NIK</th><th>Staff</th><th>Registrasi</th><th>Herregistrasi</th></tr></thead><tbody>
+      <?php if (!$rows): ?><tr><td colspan="5" class="empty-row">Belum ada data staff pada periode/filter ini.</td></tr><?php endif; ?>
       <?php foreach ($rows as $row): ?>
         <tr>
           <td><?= h((string) (($row['regional'] ?? '') ?: '-')) ?></td>
           <td><?= h((string) (($row['nik'] ?? '') ?: '-')) ?></td>
           <td><?= h((string) (($row['name'] ?? '') ?: '-')) ?></td>
           <td><strong><?= h(number_format((float) ($row['registrasi'] ?? 0), 0, ',', '.')) ?></strong></td>
+          <td><strong><?= h(number_format((float) ($row['herregistrasi'] ?? 0), 1, ',', '.')) ?></strong></td>
         </tr>
       <?php endforeach; ?>
     </tbody></table></div>

@@ -715,17 +715,28 @@ textarea {
   display: grid;
   gap: 6px;
   min-width: 0;
-  padding: 14px;
-  border: 1px solid #dbeafe;
-  border-radius: 12px;
-  background: #f8fafc;
+  min-height: 118px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
+}
+
+.source-note-grid div:first-child,
+.regional-achievement-grid article {
+  border-top: 4px solid var(--green);
+}
+
+.source-note-grid div:nth-child(2) {
+  border-top: 4px solid var(--purple);
 }
 
 .source-note-grid span,
 .regional-achievement-grid span {
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 900;
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .source-note-grid small {
@@ -749,8 +760,9 @@ textarea {
 }
 
 .regional-achievement-grid strong {
-  color: #15803d;
-  font-size: 22px;
+  color: var(--text);
+  font-size: 26px;
+  line-height: 1;
 }
 
 .regional-achievement-grid small {
@@ -1160,11 +1172,70 @@ th {
   grid-column: span 2;
 }
 
+.data-form .form-full {
+  grid-column: 1 / -1;
+}
+
 .form-actions {
   grid-column: 1 / -1;
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.profile-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.profile-preview {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--blue);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
+  text-align: center;
+}
+
+.profile-photo {
+  display: grid;
+  place-items: center;
+  width: 112px;
+  height: 112px;
+  overflow: hidden;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: var(--blue);
+  font-size: 42px;
+  font-weight: 900;
+}
+
+.profile-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.profile-preview strong {
+  font-size: 18px;
+}
+
+.profile-preview small,
+.profile-preview p {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.profile-form {
+  align-self: stretch;
 }
 
 .report-grid,
@@ -1281,6 +1352,7 @@ th {
   .registration-recap-grid,
   .source-note-grid,
   .regional-achievement-grid,
+  .profile-layout,
   .game-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1326,6 +1398,7 @@ th {
   .registration-recap-grid,
   .source-note-grid,
   .regional-achievement-grid,
+  .profile-layout,
   .game-grid {
     grid-template-columns: 1fr;
   }

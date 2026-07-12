@@ -118,6 +118,8 @@ function rsm_ensure_schema(): void
     rsm_add_column_if_missing('rsm_reports', 'user_id', 'INT NULL AFTER report_date');
     rsm_add_column_if_missing('rsm_reports', 'partner_campus_id', 'INT NULL AFTER user_id');
     rsm_add_column_if_missing('rsm_reports', 'closing_count', 'INT UNSIGNED NOT NULL DEFAULT 0 AFTER leads_count');
+    rsm_add_column_if_missing('rsm_users', 'bio_text', 'TEXT NULL AFTER campus_name');
+    rsm_add_column_if_missing('rsm_users', 'photo_path', 'VARCHAR(500) NULL AFTER bio_text');
 
     $pdo->exec(
         "CREATE TABLE IF NOT EXISTS rsm_ad_leads (
@@ -341,6 +343,67 @@ function rsm_change_password(int $userId, string $oldPassword, string $newPasswo
 
     rsm_pdo()->prepare('UPDATE rsm_users SET password_hash = ?, must_change_password = 0, updated_at = NOW() WHERE id = ?')
         ->execute([password_hash($newPassword, PASSWORD_DEFAULT), $userId]);
+}
+
+function rsm_update_profile(array $actor): void
+{
+    $userId = (int) ($actor['id'] ?? 0);
+    if ($userId <= 0) {
+        throw new RuntimeException('User aktif tidak ditemukan.');
+    }
+
+    $bio = trim((string) ($_POST['bio_text'] ?? ''));
+    if (strlen($bio) > 800) {
+        throw new InvalidArgumentException('Biodata singkat maksimal 800 karakter.');
+    }
+
+    $photoPath = rsm_profile_photo_upload($userId);
+    if ($photoPath !== null) {
+        rsm_pdo()->prepare('UPDATE rsm_users SET bio_text = ?, photo_path = ?, updated_at = NOW() WHERE id = ?')
+            ->execute([$bio !== '' ? $bio : null, $photoPath, $userId]);
+        return;
+    }
+
+    rsm_pdo()->prepare('UPDATE rsm_users SET bio_text = ?, updated_at = NOW() WHERE id = ?')
+        ->execute([$bio !== '' ? $bio : null, $userId]);
+}
+
+function rsm_profile_photo_upload(int $userId): ?string
+{
+    $file = $_FILES['profile_photo'] ?? null;
+    if (!is_array($file) || (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+        return null;
+    }
+    if ((int) $file['error'] !== UPLOAD_ERR_OK) {
+        throw new RuntimeException('Upload foto profil gagal.');
+    }
+    if ((int) ($file['size'] ?? 0) > 2 * 1024 * 1024) {
+        throw new InvalidArgumentException('Ukuran foto maksimal 2 MB.');
+    }
+
+    $tmpName = (string) ($file['tmp_name'] ?? '');
+    $info = @getimagesize($tmpName);
+    $mime = is_array($info) ? (string) ($info['mime'] ?? '') : '';
+    $extensions = [
+        'image/jpeg' => 'jpg',
+        'image/png' => 'png',
+        'image/webp' => 'webp',
+    ];
+    if (!isset($extensions[$mime])) {
+        throw new InvalidArgumentException('Foto profil harus berupa JPG, PNG, atau WEBP.');
+    }
+
+    $uploadDir = __DIR__ . '/runtime/uploads/profile';
+    if (!is_dir($uploadDir)) {
+        mkdir($uploadDir, 0775, true);
+    }
+    $relativePath = 'runtime/uploads/profile/user-' . $userId . '-' . date('Ymd-His') . '.' . $extensions[$mime];
+    $target = __DIR__ . '/' . $relativePath;
+    if (!move_uploaded_file($tmpName, $target)) {
+        throw new RuntimeException('Foto profil tidak bisa disimpan.');
+    }
+
+    return $relativePath;
 }
 
 function rsm_users(string $area): array
@@ -865,6 +928,10 @@ function rsm_handle_post(string $area, string $role): ?string
         rsm_admin_set_user_active($actor);
         return 'Status user berhasil diperbarui.';
     }
+    if ($action === 'update_profile') {
+        rsm_update_profile($actor);
+        return 'Profil berhasil diperbarui.';
+    }
     if ($action === 'create_marketing') {
         rsm_create_report($area, $role, 'marketing');
         return 'Kegiatan marketing berhasil disimpan ke database.';
@@ -1386,7 +1453,6 @@ function rsm_normalize_header(string $header): string
 
 function rsm_dashboard_filters_from_request(array $input): array
 {
-    $month = preg_match('/^\d{4}-\d{2}$/', (string) ($input['month'] ?? '')) ? (string) $input['month'] : date('Y-m');
     $dateFrom = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($input['date_from'] ?? '')) ? (string) $input['date_from'] : '';
     $dateTo = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) ($input['date_to'] ?? '')) ? (string) $input['date_to'] : '';
 
@@ -1402,6 +1468,7 @@ function rsm_dashboard_filters_from_request(array $input): array
     if ($dateFrom > $dateTo) {
         [$dateFrom, $dateTo] = [$dateTo, $dateFrom];
     }
+    $month = substr($dateFrom, 0, 7);
 
     return [
         'month' => $month,
@@ -2068,25 +2135,30 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
 function rsm_collab_staff_performance(string $area, array $filters, ?array $user = null): array
 {
     $closing = rsm_collab_staff_totals('Closing Collab', $filters, $area, $user);
+    $herreg = rsm_collab_staff_totals('Herreg Collab', $filters, $area, $user);
     $closingMeta = $closing['__meta'] ?? [];
-    unset($closing['__meta']);
+    $herregMeta = $herreg['__meta'] ?? [];
+    unset($closing['__meta'], $herreg['__meta']);
+    $keys = array_values(array_unique(array_merge(array_keys($closing), array_keys($herreg))));
     $rows = [];
-    foreach ($closing as $key => $base) {
+    foreach ($keys as $key) {
+        $base = $closing[$key] ?? $herreg[$key] ?? [];
         $registrasi = (float) ($closing[$key]['value'] ?? 0);
+        $herregistrasi = (float) ($herreg[$key]['value'] ?? 0);
         $rows[] = [
             'staff_key' => $key,
             'nik' => (string) ($base['nik'] ?? ''),
             'name' => (string) ($base['name'] ?? ''),
             'regional' => (string) ($base['regional'] ?? ''),
             'registrasi' => $registrasi,
-            'herregistrasi' => 0.0,
-            'total' => $registrasi,
+            'herregistrasi' => $herregistrasi,
         ];
     }
 
     usort($rows, static function (array $a, array $b): int {
         return strcmp((string) $a['regional'], (string) $b['regional'])
             ?: ((float) $b['registrasi'] <=> (float) $a['registrasi'])
+            ?: ((float) $b['herregistrasi'] <=> (float) $a['herregistrasi'])
             ?: strcmp((string) $a['name'], (string) $b['name']);
     });
 
@@ -2104,7 +2176,8 @@ function rsm_collab_staff_performance(string $area, array $filters, ?array $user
         }
         $regionalSummary[$regional]['staff_count']++;
         $regionalSummary[$regional]['registrasi'] += (float) $row['registrasi'];
-        $regionalSummary[$regional]['total'] += (float) $row['registrasi'];
+        $regionalSummary[$regional]['herregistrasi'] += (float) $row['herregistrasi'];
+        $regionalSummary[$regional]['total'] += (float) $row['registrasi'] + (float) $row['herregistrasi'];
     }
 
     ksort($regionalSummary);
@@ -2115,7 +2188,7 @@ function rsm_collab_staff_performance(string $area, array $filters, ?array $user
         'totals' => [
             'staff_count' => count($rows),
             'registrasi' => array_sum(array_map(static fn (array $row): float => (float) $row['registrasi'], $rows)),
-            'herregistrasi' => 0.0,
+            'herregistrasi' => array_sum(array_map(static fn (array $row): float => (float) $row['herregistrasi'], $rows)),
         ],
         'sources' => [
             'registrasi' => [
@@ -2124,6 +2197,13 @@ function rsm_collab_staff_performance(string $area, array $filters, ?array $user
                 'mode' => (string) ($closingMeta['source_mode'] ?? ''),
                 'month' => (string) ($closingMeta['report_month'] ?? ''),
                 'time' => (string) ($closingMeta['source_time'] ?? ''),
+            ],
+            'herregistrasi' => [
+                'label' => $herreg !== [] ? 'Herreg Collab' : 'Belum terbaca',
+                'url' => rsm_collab_source_url('Herreg Collab'),
+                'mode' => (string) ($herregMeta['source_mode'] ?? ''),
+                'month' => (string) ($herregMeta['report_month'] ?? ''),
+                'time' => (string) ($herregMeta['source_time'] ?? ''),
             ],
         ],
     ];

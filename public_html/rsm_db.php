@@ -1700,6 +1700,93 @@ function rsm_collab_report_from_history(string $reportName): array
     return [];
 }
 
+function rsm_collab_source_url(string $reportName): string
+{
+    return [
+        'Closing Collab' => 'https://cb.web.id/pencapaian_closing_collab_template.php',
+        'Herreg Collab' => 'https://cb.web.id/pencapaian_herreg_collab_template.php',
+    ][$reportName] ?? '';
+}
+
+function rsm_collab_report_from_url(string $reportName): array
+{
+    $url = rsm_collab_source_url($reportName);
+    if ($url === '' || !class_exists('DOMDocument')) {
+        return [];
+    }
+
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'timeout' => 8,
+            'header' => "User-Agent: RegionalB-Dashboard/1.0\r\nAccept: text/html,application/xhtml+xml\r\n",
+        ],
+        'ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+        ],
+    ]);
+    $html = @file_get_contents($url, false, $context);
+    if (!is_string($html) || trim($html) === '') {
+        return [];
+    }
+
+    $previous = libxml_use_internal_errors(true);
+    $dom = new DOMDocument();
+    $loaded = $dom->loadHTML($html);
+    libxml_clear_errors();
+    libxml_use_internal_errors($previous);
+    if (!$loaded) {
+        return [];
+    }
+
+    $tables = [];
+    foreach ($dom->getElementsByTagName('table') as $table) {
+        $rows = [];
+        foreach ($table->getElementsByTagName('tr') as $tr) {
+            $cells = [];
+            foreach ($tr->childNodes as $cell) {
+                if (!in_array(strtolower((string) $cell->nodeName), ['td', 'th'], true)) {
+                    continue;
+                }
+                $cells[] = trim(preg_replace('/\s+/', ' ', (string) $cell->textContent) ?? '');
+            }
+            if ($cells !== []) {
+                $rows[] = $cells;
+            }
+        }
+        if (count($rows) >= 3) {
+            $tables[] = $rows;
+        }
+    }
+
+    if ($tables === []) {
+        return [];
+    }
+
+    return [
+        'name' => $reportName,
+        'created_at' => date('Y-m-d H:i:s'),
+        'source_url' => $url,
+        'source_mode' => 'live_url',
+        'tables' => $tables,
+    ];
+}
+
+function rsm_collab_report(string $reportName): array
+{
+    $live = rsm_collab_report_from_url($reportName);
+    if ($live !== []) {
+        return $live;
+    }
+
+    $history = rsm_collab_report_from_history($reportName);
+    if ($history !== []) {
+        $history['source_mode'] = 'history_snapshot';
+    }
+    return $history;
+}
+
 function rsm_collab_day_indexes(array $headerRow): array
 {
     $dayIndexes = [];
@@ -1731,7 +1818,7 @@ function rsm_collab_report_month(array $rows): string
 
 function rsm_collab_staff_totals(string $reportName, array $filters, string $area = 'Regional', ?array $user = null): array
 {
-    $report = rsm_collab_report_from_history($reportName);
+    $report = rsm_collab_report($reportName);
     $rows = $report['tables'][0] ?? [];
     if (!is_array($rows) || count($rows) < 3) {
         return [];
@@ -1805,6 +1892,9 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
                     'name' => $staffName,
                     'regional' => 'Regional ' . $regional,
                     'value' => 0.0,
+                    'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
+                    'source_mode' => (string) ($report['source_mode'] ?? 'unknown'),
+                    'report_month' => $reportMonth,
                 ];
             }
             $totals[$key]['value'] += $value;
@@ -1812,6 +1902,82 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
     }
 
     return $totals;
+}
+
+function rsm_collab_staff_performance(string $area, array $filters, ?array $user = null): array
+{
+    $closing = rsm_collab_staff_totals('Closing Collab', $filters, $area, $user);
+    $herreg = rsm_collab_staff_totals('Herreg Collab', $filters, $area, $user);
+    $keys = array_values(array_unique(array_merge(array_keys($closing), array_keys($herreg))));
+    $rows = [];
+    foreach ($keys as $key) {
+        $base = $closing[$key] ?? $herreg[$key] ?? [];
+        $registrasi = (float) ($closing[$key]['value'] ?? 0);
+        $herregistrasi = (float) ($herreg[$key]['value'] ?? 0);
+        $rows[] = [
+            'staff_key' => $key,
+            'nik' => (string) ($base['nik'] ?? ''),
+            'name' => (string) ($base['name'] ?? ''),
+            'regional' => (string) ($base['regional'] ?? ''),
+            'registrasi' => $registrasi,
+            'herregistrasi' => $herregistrasi,
+            'total' => $registrasi + $herregistrasi,
+        ];
+    }
+
+    usort($rows, static function (array $a, array $b): int {
+        return strcmp((string) $a['regional'], (string) $b['regional'])
+            ?: ((float) $b['registrasi'] <=> (float) $a['registrasi'])
+            ?: ((float) $b['herregistrasi'] <=> (float) $a['herregistrasi'])
+            ?: strcmp((string) $a['name'], (string) $b['name']);
+    });
+
+    $regionalSummary = [];
+    foreach ($rows as $row) {
+        $regional = (string) ($row['regional'] ?: 'Tanpa Regional');
+        if (!isset($regionalSummary[$regional])) {
+            $regionalSummary[$regional] = [
+                'regional' => $regional,
+                'staff_count' => 0,
+                'registrasi' => 0.0,
+                'herregistrasi' => 0.0,
+                'total' => 0.0,
+            ];
+        }
+        $regionalSummary[$regional]['staff_count']++;
+        $regionalSummary[$regional]['registrasi'] += (float) $row['registrasi'];
+        $regionalSummary[$regional]['herregistrasi'] += (float) $row['herregistrasi'];
+        $regionalSummary[$regional]['total'] += (float) $row['total'];
+    }
+
+    ksort($regionalSummary);
+
+    $firstClosing = $closing !== [] ? ($closing[array_key_first($closing)] ?? []) : [];
+    $firstHerreg = $herreg !== [] ? ($herreg[array_key_first($herreg)] ?? []) : [];
+
+    return [
+        'rows' => $rows,
+        'regional_summary' => array_values($regionalSummary),
+        'totals' => [
+            'staff_count' => count($rows),
+            'registrasi' => array_sum(array_map(static fn (array $row): float => (float) $row['registrasi'], $rows)),
+            'herregistrasi' => array_sum(array_map(static fn (array $row): float => (float) $row['herregistrasi'], $rows)),
+        ],
+        'sources' => [
+            'registrasi' => [
+                'label' => $closing !== [] ? 'Closing Collab' : 'Belum terbaca',
+                'url' => rsm_collab_source_url('Closing Collab'),
+                'mode' => (string) ($firstClosing['source_mode'] ?? ''),
+                'month' => (string) ($firstClosing['report_month'] ?? ''),
+            ],
+            'herregistrasi' => [
+                'label' => $herreg !== [] ? 'Herreg Collab' : 'Belum terbaca',
+                'url' => rsm_collab_source_url('Herreg Collab'),
+                'mode' => (string) ($firstHerreg['source_mode'] ?? ''),
+                'month' => (string) ($firstHerreg['report_month'] ?? ''),
+            ],
+        ],
+    ];
 }
 
 function rsm_gamification_summary(string $area, array $filters, ?array $user = null): array

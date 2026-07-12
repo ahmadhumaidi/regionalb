@@ -699,6 +699,69 @@ textarea {
   text-align: right;
 }
 
+.source-note-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.source-note-grid div,
+.regional-achievement-grid article {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.source-note-grid span,
+.regional-achievement-grid span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.source-note-grid small {
+  overflow-wrap: anywhere;
+  color: #334155;
+  font-weight: 700;
+}
+
+.source-note-grid em {
+  color: var(--blue);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.regional-achievement-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.regional-achievement-grid strong {
+  color: #15803d;
+  font-size: 22px;
+}
+
+.regional-achievement-grid small {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.achievement-table td:nth-child(4) strong {
+  color: #15803d;
+}
+
+.achievement-table td:nth-child(5) strong {
+  color: var(--purple);
+}
+
 .status-map-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1211,6 +1274,8 @@ th {
   .dashboard-filter,
   .status-map-grid,
   .registration-recap-grid,
+  .source-note-grid,
+  .regional-achievement-grid,
   .game-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1254,6 +1319,8 @@ th {
   .status-map-grid,
   .compact-metrics,
   .registration-recap-grid,
+  .source-note-grid,
+  .regional-achievement-grid,
   .game-grid {
     grid-template-columns: 1fr;
   }

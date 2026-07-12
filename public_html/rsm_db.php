@@ -1840,9 +1840,64 @@ function rsm_collab_day_indexes(array $headerRow): array
     return [$dayIndexes, $totalIndex];
 }
 
+function rsm_collab_layout(array $rows): array
+{
+    $monthRowIndex = null;
+    $dateRowIndex = null;
+    $month = '';
+    foreach ($rows as $rowIndex => $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        foreach ($row as $cell) {
+            $label = trim((string) $cell);
+            if ($month === '' && preg_match('/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)\b\s+\d{4}/i', $label, $match)) {
+                $month = $match[0];
+                $monthRowIndex = (int) $rowIndex;
+            }
+        }
+        [$dayIndexes, $totalIndex] = rsm_collab_day_indexes($row);
+        if ($dayIndexes !== [] && count($dayIndexes) >= 3) {
+            $dateRowIndex = (int) $rowIndex;
+            break;
+        }
+    }
+
+    $headerRow = $dateRowIndex !== null ? ($rows[$dateRowIndex] ?? []) : [];
+    [$dayIndexes, $totalIndex] = is_array($headerRow) ? rsm_collab_day_indexes($headerRow) : [[], null];
+    if ($totalIndex === null && $dayIndexes !== []) {
+        $totalIndex = max($dayIndexes) + 1;
+    }
+
+    $lowerHeader = array_map(static fn (mixed $value): string => strtolower(trim((string) $value)), is_array($headerRow) ? $headerRow : []);
+    $findHeader = static function (array $needles) use ($lowerHeader): ?int {
+        foreach ($lowerHeader as $index => $label) {
+            foreach ($needles as $needle) {
+                if ($label === $needle || str_contains($label, $needle)) {
+                    return (int) $index;
+                }
+            }
+        }
+        return null;
+    };
+
+    return [
+        'month_label' => $month,
+        'month_row_index' => $monthRowIndex,
+        'date_row_index' => $dateRowIndex,
+        'data_start_index' => $dateRowIndex !== null ? $dateRowIndex + 1 : 2,
+        'day_indexes' => $dayIndexes,
+        'total_index' => $totalIndex,
+        'regional_index' => $findHeader(['wilayah']) ?? 0,
+        'staff_nik_index' => $findHeader(['nik staff']) ?? 3,
+        'staff_name_index' => $findHeader(['nama staff']) ?? 4,
+    ];
+}
+
 function rsm_collab_report_month(array $rows): string
 {
-    $label = trim((string) ($rows[0][3] ?? ''));
+    $layout = rsm_collab_layout($rows);
+    $label = trim((string) ($layout['month_label'] ?? ''));
     if ($label === '') {
         return '';
     }
@@ -1877,10 +1932,9 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
         ];
     }
 
-    [$dayIndexes, $totalIndex] = rsm_collab_day_indexes($rows[1] ?? []);
-    if ($totalIndex === null && $dayIndexes !== []) {
-        $totalIndex = max($dayIndexes) + 1;
-    }
+    $layout = rsm_collab_layout($rows);
+    $dayIndexes = $layout['day_indexes'];
+    $totalIndex = $layout['total_index'];
 
     if ($totalIndex === null) {
         return [
@@ -1897,7 +1951,8 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
     if (($filters['date_from'] ?? '') !== '' && ($filters['date_from'] ?? '') === ($filters['date_to'] ?? '')) {
         $targetDay = (int) date('j', strtotime((string) $filters['date_from']));
     }
-    $dayIndex = $targetDay > 0 ? array_values(array_filter($dayIndexes, static fn (int $index): bool => trim((string) ($rows[1][$index] ?? '')) === str_pad((string) $targetDay, 2, '0', STR_PAD_LEFT)))[0] ?? null : null;
+    $dateHeaderRow = $layout['date_row_index'] !== null ? ($rows[$layout['date_row_index']] ?? []) : [];
+    $dayIndex = $targetDay > 0 ? array_values(array_filter($dayIndexes, static fn (int $index): bool => trim((string) ($dateHeaderRow[$index] ?? '')) === str_pad((string) $targetDay, 2, '0', STR_PAD_LEFT)))[0] ?? null : null;
     $valueIndex = $dayIndex ?? $totalIndex;
     $allowedRegionals = rsm_area_regionals($area);
     $filterRegional = (string) ($filters['wilayah'] ?? '');
@@ -1919,13 +1974,17 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
 
     $totals = [];
     foreach ($rows as $index => $row) {
-        if ($index < 2 || !is_array($row)) {
+        if ($index < (int) $layout['data_start_index'] || !is_array($row)) {
             continue;
         }
 
-        $regional = trim((string) ($row[0] ?? ''));
-        $staffNik = trim((string) ($row[3] ?? ''));
-        $staffName = trim((string) ($row[4] ?? ''));
+        $regional = trim((string) ($row[(int) $layout['regional_index']] ?? ''));
+        $staffNik = trim((string) ($row[(int) $layout['staff_nik_index']] ?? ''));
+        $staffName = trim((string) ($row[(int) $layout['staff_name_index']] ?? ''));
+        if (!preg_match('/^SG[.\d-]+$/i', $staffNik) && preg_match('/^SG[.\d-]+$/i', trim((string) ($row[(int) $layout['staff_nik_index'] + 1] ?? '')))) {
+            $staffNik = trim((string) ($row[(int) $layout['staff_nik_index'] + 1] ?? ''));
+            $staffName = trim((string) ($row[(int) $layout['staff_name_index'] + 1] ?? $staffName));
+        }
         if ($staffName === '' || !preg_match('/^[1-7]$/', $regional)) {
             continue;
         }

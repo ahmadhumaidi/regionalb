@@ -1961,13 +1961,38 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
         ];
     }
 
-    $targetDay = 0;
-    if (($filters['date_from'] ?? '') !== '' && ($filters['date_from'] ?? '') === ($filters['date_to'] ?? '')) {
-        $targetDay = (int) date('j', strtotime((string) $filters['date_from']));
-    }
     $dateHeaderRow = $layout['date_row_index'] !== null ? ($rows[$layout['date_row_index']] ?? []) : [];
-    $dayIndex = $targetDay > 0 ? array_values(array_filter($dayIndexes, static fn (int $index): bool => trim((string) ($dateHeaderRow[$index] ?? '')) === str_pad((string) $targetDay, 2, '0', STR_PAD_LEFT)))[0] ?? null : null;
-    $valueIndex = $dayIndex ?? $totalIndex;
+    $dayValueIndexes = [];
+    $dayOffset = 0;
+    foreach ($dayIndexes as $headerIndex) {
+        $dayLabel = trim((string) ($dateHeaderRow[$headerIndex] ?? ''));
+        if (!preg_match('/^\d{1,2}$/', $dayLabel)) {
+            continue;
+        }
+        $dayValueIndexes[(int) $dayLabel] = 5 + $dayOffset;
+        $dayOffset++;
+    }
+    if ($dayValueIndexes !== []) {
+        $totalIndex = 5 + count($dayValueIndexes);
+    }
+
+    $valueIndexes = [];
+    $fromTimestamp = !empty($filters['date_from']) ? strtotime((string) $filters['date_from']) : false;
+    $toTimestamp = !empty($filters['date_to']) ? strtotime((string) $filters['date_to']) : false;
+    if ($fromTimestamp !== false && $toTimestamp !== false && $reportMonth !== '') {
+        if ($fromTimestamp > $toTimestamp) {
+            [$fromTimestamp, $toTimestamp] = [$toTimestamp, $fromTimestamp];
+        }
+        foreach ($dayValueIndexes as $dayNumber => $valueIndex) {
+            $columnTimestamp = strtotime($reportMonth . '-' . str_pad((string) $dayNumber, 2, '0', STR_PAD_LEFT));
+            if ($columnTimestamp !== false && $columnTimestamp >= $fromTimestamp && $columnTimestamp <= $toTimestamp) {
+                $valueIndexes[] = (int) $valueIndex;
+            }
+        }
+    }
+    if ($valueIndexes === []) {
+        $valueIndexes = [(int) $totalIndex];
+    }
     $allowedRegionals = rsm_area_regionals($area);
     $filterRegional = (string) ($filters['wilayah'] ?? '');
     $filterStaff = (string) ($filters['staff_name'] ?? '');
@@ -2009,7 +2034,10 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
             continue;
         }
 
-        $value = rsm_number_value($row[$valueIndex] ?? 0);
+        $value = 0.0;
+        foreach ($valueIndexes as $valueIndex) {
+            $value += rsm_number_value($row[$valueIndex] ?? 0);
+        }
         $keys = [rsm_username_from_nik_or_name($staffNik !== '' ? $staffNik : null, $staffName)];
         foreach ($keys as $key) {
             if (!isset($totals[$key])) {
@@ -2040,31 +2068,25 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
 function rsm_collab_staff_performance(string $area, array $filters, ?array $user = null): array
 {
     $closing = rsm_collab_staff_totals('Closing Collab', $filters, $area, $user);
-    $herreg = rsm_collab_staff_totals('Herreg Collab', $filters, $area, $user);
     $closingMeta = $closing['__meta'] ?? [];
-    $herregMeta = $herreg['__meta'] ?? [];
-    unset($closing['__meta'], $herreg['__meta']);
-    $keys = array_values(array_unique(array_merge(array_keys($closing), array_keys($herreg))));
+    unset($closing['__meta']);
     $rows = [];
-    foreach ($keys as $key) {
-        $base = $closing[$key] ?? $herreg[$key] ?? [];
+    foreach ($closing as $key => $base) {
         $registrasi = (float) ($closing[$key]['value'] ?? 0);
-        $herregistrasi = (float) ($herreg[$key]['value'] ?? 0);
         $rows[] = [
             'staff_key' => $key,
             'nik' => (string) ($base['nik'] ?? ''),
             'name' => (string) ($base['name'] ?? ''),
             'regional' => (string) ($base['regional'] ?? ''),
             'registrasi' => $registrasi,
-            'herregistrasi' => $herregistrasi,
-            'total' => $registrasi + $herregistrasi,
+            'herregistrasi' => 0.0,
+            'total' => $registrasi,
         ];
     }
 
     usort($rows, static function (array $a, array $b): int {
         return strcmp((string) $a['regional'], (string) $b['regional'])
             ?: ((float) $b['registrasi'] <=> (float) $a['registrasi'])
-            ?: ((float) $b['herregistrasi'] <=> (float) $a['herregistrasi'])
             ?: strcmp((string) $a['name'], (string) $b['name']);
     });
 
@@ -2082,8 +2104,7 @@ function rsm_collab_staff_performance(string $area, array $filters, ?array $user
         }
         $regionalSummary[$regional]['staff_count']++;
         $regionalSummary[$regional]['registrasi'] += (float) $row['registrasi'];
-        $regionalSummary[$regional]['herregistrasi'] += (float) $row['herregistrasi'];
-        $regionalSummary[$regional]['total'] += (float) $row['total'];
+        $regionalSummary[$regional]['total'] += (float) $row['registrasi'];
     }
 
     ksort($regionalSummary);
@@ -2094,7 +2115,7 @@ function rsm_collab_staff_performance(string $area, array $filters, ?array $user
         'totals' => [
             'staff_count' => count($rows),
             'registrasi' => array_sum(array_map(static fn (array $row): float => (float) $row['registrasi'], $rows)),
-            'herregistrasi' => array_sum(array_map(static fn (array $row): float => (float) $row['herregistrasi'], $rows)),
+            'herregistrasi' => 0.0,
         ],
         'sources' => [
             'registrasi' => [
@@ -2103,13 +2124,6 @@ function rsm_collab_staff_performance(string $area, array $filters, ?array $user
                 'mode' => (string) ($closingMeta['source_mode'] ?? ''),
                 'month' => (string) ($closingMeta['report_month'] ?? ''),
                 'time' => (string) ($closingMeta['source_time'] ?? ''),
-            ],
-            'herregistrasi' => [
-                'label' => $herreg !== [] ? 'Herreg Collab' : 'Belum terbaca',
-                'url' => rsm_collab_source_url('Herreg Collab'),
-                'mode' => (string) ($herregMeta['source_mode'] ?? ''),
-                'month' => (string) ($herregMeta['report_month'] ?? ''),
-                'time' => (string) ($herregMeta['source_time'] ?? ''),
             ],
         ],
     ];

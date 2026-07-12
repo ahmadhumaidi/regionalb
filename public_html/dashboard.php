@@ -21,7 +21,7 @@ if (!isset($roles[$role])) {
 
 $menus = [
     'dashboard' => 'Dashboard Utama',
-    'pencapaian' => 'Pencapaian Staff',
+    'pencapaian' => 'Pencapaian Registrasi',
     'kegiatan' => 'Kegiatan Marketing',
     'anggaran' => 'Laporan Iklan',
     'aktivitas' => 'Aktivitas Lain',
@@ -429,11 +429,10 @@ $registrationRecap = [
           <?php render_status_mapping_panel($dashboardOverview['status_map'], $dashboardOverview['status_buckets']); ?>
         </section>
       <?php elseif ($page === 'pencapaian'): ?>
-        <section class="summary-grid four">
+        <section class="summary-grid three">
           <article class="summary-card tone-green"><span>Total Registrasi</span><strong><?= h(number_format((float) $staffAchievement['totals']['registrasi'], 0, ',', '.')) ?></strong><small>Acuan Closing Collab</small></article>
-          <article class="summary-card tone-purple"><span>Total Herregistrasi</span><strong><?= h(number_format((float) $staffAchievement['totals']['herregistrasi'], 0, ',', '.')) ?></strong><small>Acuan Herreg Collab</small></article>
           <article class="summary-card tone-blue"><span>Staff Terbaca</span><strong><?= h(number_format((float) $staffAchievement['totals']['staff_count'], 0, ',', '.')) ?></strong><small>Dalam scope filter</small></article>
-          <article class="summary-card tone-slate"><span>Sumber Data</span><strong>Collab</strong><small>Template CB Web</small></article>
+          <article class="summary-card tone-slate"><span>Sumber Data</span><strong>Closing Collab</strong><small>Registrasi saja</small></article>
         </section>
 
         <form class="filter-bar dashboard-filter" method="get">
@@ -456,8 +455,8 @@ $registrationRecap = [
 
         <section class="panel achievement-panel">
           <div class="panel-head">
-            <h2>Pencapaian Registrasi & Herregistrasi Staff</h2>
-            <span>Registrasi dari Closing Collab, herregistrasi dari Herreg Collab</span>
+            <h2>Pencapaian Registrasi Staff</h2>
+            <span>Sumber live Closing Collab sesuai rentang tanggal aktif</span>
           </div>
           <?php render_collab_source_note($staffAchievement['sources'] ?? []); ?>
           <?php render_regional_achievement_summary($staffAchievement['regional_summary'] ?? []); ?>
@@ -939,26 +938,16 @@ function report_label_for_type(string $type): string
 function render_collab_source_note(array $sources): void
 {
     $registrasi = $sources['registrasi'] ?? [];
-    $herregistrasi = $sources['herregistrasi'] ?? [];
     $registrasiMode = (string) ($registrasi['mode'] ?? '');
-    $herregistrasiMode = (string) ($herregistrasi['mode'] ?? '');
     $registrasiTimeLabel = str_starts_with($registrasiMode, 'live_url') ? 'Jam baca' : 'Jam snapshot';
-    $herregistrasiTimeLabel = str_starts_with($herregistrasiMode, 'live_url') ? 'Jam baca' : 'Jam snapshot';
     ?>
-    <div class="source-note-grid">
+    <div class="source-note-grid source-note-single">
       <div>
-        <span>Registrasi</span>
+        <span>Sumber registrasi</span>
         <strong><?= h((string) ($registrasi['label'] ?? 'Closing Collab')) ?></strong>
         <small><?= h((string) ($registrasi['url'] ?? 'https://cb.web.id/pencapaian_closing_collab_template.php')) ?></small>
         <?php if (!empty($registrasi['month']) || !empty($registrasi['mode'])): ?><em><?= h(trim((string) ($registrasi['month'] ?? '') . ' ' . $registrasiMode)) ?></em><?php endif; ?>
-        <?php if (!empty($registrasi['time'])): ?><small><?= h($registrasiTimeLabel) ?>: <?= h((string) $registrasi['time']) ?></small><?php endif; ?>
-      </div>
-      <div>
-        <span>Herregistrasi</span>
-        <strong><?= h((string) ($herregistrasi['label'] ?? 'Herreg Collab')) ?></strong>
-        <small><?= h((string) ($herregistrasi['url'] ?? 'https://cb.web.id/pencapaian_herreg_collab_template.php')) ?></small>
-        <?php if (!empty($herregistrasi['month']) || !empty($herregistrasi['mode'])): ?><em><?= h(trim((string) ($herregistrasi['month'] ?? '') . ' ' . $herregistrasiMode)) ?></em><?php endif; ?>
-        <?php if (!empty($herregistrasi['time'])): ?><small><?= h($herregistrasiTimeLabel) ?>: <?= h((string) $herregistrasi['time']) ?></small><?php endif; ?>
+        <?php if (!empty($registrasi['time'])): ?><small><?= h($registrasiTimeLabel) ?>: <?= h((string) $registrasi['time']) ?> WIB</small><?php endif; ?>
       </div>
     </div>
     <?php
@@ -968,12 +957,12 @@ function render_regional_achievement_summary(array $rows): void
 {
     ?>
     <div class="regional-achievement-grid">
-      <?php if (!$rows): ?><div class="empty-game">Belum ada data pencapaian dari source Collab pada filter ini.</div><?php endif; ?>
+      <?php if (!$rows): ?><div class="empty-game">Belum ada data registrasi dari Closing Collab pada filter ini.</div><?php endif; ?>
       <?php foreach ($rows as $row): ?>
         <article>
           <span><?= h((string) ($row['regional'] ?? '-')) ?></span>
           <strong><?= h(number_format((float) ($row['registrasi'] ?? 0), 0, ',', '.')) ?> registrasi</strong>
-          <small><?= h(number_format((float) ($row['herregistrasi'] ?? 0), 0, ',', '.')) ?> herregistrasi - <?= h(number_format((float) ($row['staff_count'] ?? 0), 0, ',', '.')) ?> staff</small>
+          <small><?= h(number_format((float) ($row['staff_count'] ?? 0), 0, ',', '.')) ?> staff terbaca</small>
         </article>
       <?php endforeach; ?>
     </div>
@@ -983,16 +972,14 @@ function render_regional_achievement_summary(array $rows): void
 function render_staff_achievement_table(array $rows): void
 {
     ?>
-    <div class="table-wrap achievement-table"><table><thead><tr><th>Regional</th><th>NIK</th><th>Staff</th><th>Registrasi</th><th>Herregistrasi</th><th>Total</th></tr></thead><tbody>
-      <?php if (!$rows): ?><tr><td colspan="6" class="empty-row">Belum ada data staff pada periode/filter ini.</td></tr><?php endif; ?>
+    <div class="table-wrap achievement-table"><table><thead><tr><th>Regional</th><th>NIK</th><th>Staff</th><th>Registrasi</th></tr></thead><tbody>
+      <?php if (!$rows): ?><tr><td colspan="4" class="empty-row">Belum ada data staff pada periode/filter ini.</td></tr><?php endif; ?>
       <?php foreach ($rows as $row): ?>
         <tr>
           <td><?= h((string) (($row['regional'] ?? '') ?: '-')) ?></td>
           <td><?= h((string) (($row['nik'] ?? '') ?: '-')) ?></td>
           <td><?= h((string) (($row['name'] ?? '') ?: '-')) ?></td>
           <td><strong><?= h(number_format((float) ($row['registrasi'] ?? 0), 0, ',', '.')) ?></strong></td>
-          <td><strong><?= h(number_format((float) ($row['herregistrasi'] ?? 0), 0, ',', '.')) ?></strong></td>
-          <td><strong><?= h(number_format((float) ($row['total'] ?? 0), 0, ',', '.')) ?></strong></td>
         </tr>
       <?php endforeach; ?>
     </tbody></table></div>

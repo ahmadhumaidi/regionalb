@@ -706,6 +706,10 @@ textarea {
   margin-bottom: 14px;
 }
 
+.source-note-grid.source-note-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .source-note-grid div,
 .regional-achievement-grid article {
   display: grid;
@@ -758,8 +762,9 @@ textarea {
   color: #15803d;
 }
 
-.achievement-table td:nth-child(5) strong {
-  color: var(--purple);
+.achievement-table th:last-child,
+.achievement-table td:last-child {
+  text-align: right;
 }
 
 .status-map-grid {

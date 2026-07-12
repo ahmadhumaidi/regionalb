@@ -110,6 +110,8 @@ $editReport = null;
 $authUser = null;
 $loginError = null;
 $managedUsers = [];
+$impersonationSource = null;
+$impersonationUsers = [];
 $dashboardFilters = rsm_dashboard_filters_from_request($_GET);
 $dashboardOverview = [
     'status_map' => ['report_type' => [], 'status' => [], 'progress_status' => [], 'follow_up_result' => [], 'closing_status' => []],
@@ -186,6 +188,12 @@ try {
     } elseif ($postAction !== 'login') {
         $notice = rsm_handle_post($area, $role);
         $authUser = rsm_auth_user();
+    }
+
+    $impersonationSource = rsm_impersonation_source();
+    $impersonationAdmin = $impersonationSource ?: $authUser;
+    if (rsm_can_impersonate($impersonationAdmin)) {
+        $impersonationUsers = rsm_users($area);
     }
 
     $references = rsm_reference_options($area, $authUser, $role);
@@ -265,8 +273,8 @@ $registrationRecap = [
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title><?= h($pageTitles[$page]) ?> - <?= h($area) ?></title>
-  <link rel="stylesheet" href="assets/style.css?v=188b053">
-  <?php if ($page === 'profile'): ?><link rel="stylesheet" href="assets/profile.css?v=188b053"><?php endif; ?>
+  <link rel="stylesheet" href="assets/style.css?v=<?= h((string) @filemtime(__DIR__ . '/assets/style.css')) ?>">
+  <?php if ($page === 'profile'): ?><link rel="stylesheet" href="assets/profile.css?v=<?= h((string) @filemtime(__DIR__ . '/assets/profile.css')) ?>"><?php endif; ?>
 </head>
 <body>
   <div class="app-shell">
@@ -314,6 +322,21 @@ $registrationRecap = [
               </label>
             </form>
           <?php endif; ?>
+          <?php if ($impersonationUsers): ?>
+            <form method="post" class="role-form impersonate-form">
+              <input type="hidden" name="action" value="impersonate_user">
+              <label>
+                <span>Masuk sebagai</span>
+                <select name="target_user_id" onchange="this.form.submit()">
+                  <?php foreach ($impersonationUsers as $impersonationUser): ?>
+                    <option value="<?= h((string) ($impersonationUser['id'] ?? 0)) ?>" <?= (int) ($impersonationUser['id'] ?? 0) === (int) ($authUser['id'] ?? 0) ? 'selected' : '' ?>>
+                      <?= h((string) ($impersonationUser['name'] ?? '-')) ?> - <?= h((string) ($impersonationUser['jabatan'] ?? $impersonationUser['role'] ?? '-')) ?>
+                    </option>
+                  <?php endforeach; ?>
+                </select>
+              </label>
+            </form>
+          <?php endif; ?>
           <div class="user-pill">
             <strong><?= h((string) ($authUser['name'] ?? '-')) ?></strong>
             <span><?= h((string) ($authUser['username'] ?? '-')) ?> - <?= h((string) ($authUser['jabatan'] ?? $roles[$role]['label'])) ?></span>
@@ -325,6 +348,12 @@ $registrationRecap = [
 
       <?php if ($notice): ?>
         <div class="alert alert-success"><?= h($notice) ?></div>
+      <?php endif; ?>
+      <?php if ($impersonationSource): ?>
+        <div class="alert impersonation-banner">
+          <span>Sedang masuk sebagai <strong><?= h((string) ($authUser['name'] ?? '-')) ?></strong>. Akun asli: <?= h((string) ($impersonationSource['name'] ?? '-')) ?>.</span>
+          <form method="post"><input type="hidden" name="action" value="stop_impersonation"><button class="secondary-btn">Kembali ke akun asli</button></form>
+        </div>
       <?php endif; ?>
       <?php if ($dbError): ?>
         <div class="alert alert-danger">Database RSM belum tersambung: <?= h($dbError) ?></div>
@@ -710,7 +739,7 @@ function render_login_page(?string $error): void
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <title>Login RSM</title>
-      <link rel="stylesheet" href="assets/style.css?v=188b053">
+      <link rel="stylesheet" href="assets/style.css?v=<?= h((string) @filemtime(__DIR__ . '/assets/style.css')) ?>">
     </head>
     <body class="login-body">
       <main class="login-card">

@@ -408,6 +408,20 @@ textarea {
   background: #fef2f2;
 }
 
+.impersonation-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #1e3a8a;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+}
+
+.impersonation-banner form {
+  margin: 0;
+}
+
 .filter-bar.compact {
   grid-template-columns: 2fr repeat(3, 1fr);
 }

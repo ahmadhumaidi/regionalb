@@ -306,6 +306,65 @@ function rsm_auth_user(): ?array
     return $user ?: null;
 }
 
+function rsm_user_by_id(int $id): ?array
+{
+    if ($id <= 0) {
+        return null;
+    }
+    $stmt = rsm_pdo()->prepare('SELECT * FROM rsm_users WHERE id = ? AND is_active = 1 LIMIT 1');
+    $stmt->execute([$id]);
+    $user = $stmt->fetch();
+    return $user ?: null;
+}
+
+function rsm_impersonation_source(): ?array
+{
+    $id = (int) ($_SESSION['rsm_original_user_id'] ?? 0);
+    return $id > 0 ? rsm_user_by_id($id) : null;
+}
+
+function rsm_admin_actor(): ?array
+{
+    return rsm_impersonation_source() ?: rsm_auth_user();
+}
+
+function rsm_can_impersonate(?array $user): bool
+{
+    return in_array((string) ($user['role'] ?? ''), ['senior'], true);
+}
+
+function rsm_impersonate_user(string $area, int $targetUserId): void
+{
+    $actor = rsm_admin_actor();
+    if (!rsm_can_impersonate($actor)) {
+        throw new RuntimeException('Hanya Senior Manager yang bisa masuk sebagai user lain.');
+    }
+    $target = rsm_user_by_id($targetUserId);
+    if (!$target) {
+        throw new InvalidArgumentException('User tujuan tidak ditemukan atau tidak aktif.');
+    }
+    if (!empty($target['area']) && (string) $target['area'] !== $area) {
+        throw new RuntimeException('User tujuan berada di luar area ini.');
+    }
+    if ((int) ($target['id'] ?? 0) === (int) ($actor['id'] ?? 0)) {
+        rsm_stop_impersonation();
+        return;
+    }
+    if (empty($_SESSION['rsm_original_user_id'])) {
+        $_SESSION['rsm_original_user_id'] = (int) ($actor['id'] ?? 0);
+    }
+    $_SESSION['rsm_user_id'] = (int) $target['id'];
+}
+
+function rsm_stop_impersonation(): void
+{
+    $originalId = (int) ($_SESSION['rsm_original_user_id'] ?? 0);
+    if ($originalId > 0) {
+        $_SESSION['rsm_user_id'] = $originalId;
+    }
+    unset($_SESSION['rsm_original_user_id']);
+}
+
 function rsm_login(string $username, string $password): bool
 {
     $username = trim($username);
@@ -317,12 +376,14 @@ function rsm_login(string $username, string $password): bool
     }
     session_regenerate_id(true);
     $_SESSION['rsm_user_id'] = (int) $user['id'];
+    unset($_SESSION['rsm_original_user_id']);
     return true;
 }
 
 function rsm_logout(): void
 {
     unset($_SESSION['rsm_user_id']);
+    unset($_SESSION['rsm_original_user_id']);
 }
 
 function rsm_change_password(int $userId, string $oldPassword, string $newPassword, string $confirmPassword): void
@@ -908,6 +969,14 @@ function rsm_handle_post(string $area, string $role): ?string
 
     $action = rsm_input('action');
     $actor = rsm_auth_user() ?: ['role' => $role];
+    if ($action === 'impersonate_user') {
+        rsm_impersonate_user($area, (int) rsm_input('target_user_id'));
+        return 'Tampilan user aktif berhasil diganti.';
+    }
+    if ($action === 'stop_impersonation') {
+        rsm_stop_impersonation();
+        return 'Kembali ke akun asli.';
+    }
     if ($action === 'admin_create_user') {
         rsm_admin_save_user($area, $actor);
         return 'User berhasil ditambahkan.';

@@ -1404,20 +1404,22 @@ function render_ads_table(array $rows, string $role): void
         $regionalKey = strtolower($regional);
         $campusKey = strtolower($campus);
         if (!isset($groups[$regionalKey])) {
-            $groups[$regionalKey] = ['label' => $regional, 'campuses' => []];
+            $groups[$regionalKey] = ['label' => $regional, 'totals' => ads_group_totals(), 'campuses' => []];
         }
         if (!isset($groups[$regionalKey]['campuses'][$campusKey])) {
-            $groups[$regionalKey]['campuses'][$campusKey] = ['label' => $campus, 'rows' => []];
+            $groups[$regionalKey]['campuses'][$campusKey] = ['label' => $campus, 'totals' => ads_group_totals(), 'rows' => []];
         }
+        ads_group_add($groups[$regionalKey]['totals'], $row);
+        ads_group_add($groups[$regionalKey]['campuses'][$campusKey]['totals'], $row);
         $groups[$regionalKey]['campuses'][$campusKey]['rows'][] = $row;
     }
     ?>
     <div class="table-wrap"><table><thead><tr><th>Tanggal</th><th>Unit/Kampus</th><th>Platform</th><th>Campaign</th><th>Anggaran</th><th>Realisasi</th><th>Leads</th><th>Closing</th><th>CPL</th><th>Status</th><th>Aksi</th></tr></thead><tbody>
       <?php if (!$rows): ?><tr><td colspan="11" class="empty-row">Belum ada laporan anggaran iklan di database.</td></tr><?php endif; ?>
       <?php foreach ($groups as $regionalGroup): ?>
-        <tr class="group-heading"><td colspan="11">Regional: <?= h((string) $regionalGroup['label']) ?></td></tr>
+        <tr class="group-heading"><td colspan="11">Regional: <?= h((string) $regionalGroup['label']) ?> <span><?= h(ads_group_total_label($regionalGroup['totals'])) ?></span></td></tr>
         <?php foreach ($regionalGroup['campuses'] as $campusGroup): ?>
-          <tr class="group-subheading"><td colspan="11">Nama Kampus: <?= h((string) $campusGroup['label']) ?></td></tr>
+          <tr class="group-subheading"><td colspan="11">Nama Kampus: <?= h((string) $campusGroup['label']) ?> <span><?= h(ads_group_total_label($campusGroup['totals'])) ?></span></td></tr>
           <?php foreach ($campusGroup['rows'] as $row): ?>
             <tr><td><?= h((string) $row['report_date']) ?></td><td><?= h((string) (($row['unit_name'] ?? '') ?: '-')) ?></td><td><?= h((string) ($row['platform'] ?: '-')) ?></td><td><?= h((string) ($row['campaign_name'] ?: $row['title'])) ?></td><td><?= h(money_idr((float) $row['budget_requested'])) ?></td><td><?= h(money_idr((float) $row['realization_amount'])) ?></td><td><?= h((string) $row['leads_count']) ?></td><td><?= h((string) ($row['closing_count'] ?? 0)) ?></td><td><?= h(money_idr((float) $row['cpl'])) ?></td><td><?= badge((string) $row['status']) ?></td><td><?= action_buttons($role, (int) $row['id'], (string) $row['status']) ?></td></tr>
           <?php endforeach; ?>
@@ -1425,6 +1427,29 @@ function render_ads_table(array $rows, string $role): void
       <?php endforeach; ?>
     </tbody></table></div>
     <?php
+}
+
+function ads_group_totals(): array
+{
+    return ['count' => 0, 'requested' => 0.0, 'realization' => 0.0, 'leads' => 0, 'closing' => 0];
+}
+
+function ads_group_add(array &$totals, array $row): void
+{
+    $totals['count']++;
+    $totals['requested'] += (float) ($row['budget_requested'] ?? 0);
+    $totals['realization'] += (float) ($row['realization_amount'] ?? 0);
+    $totals['leads'] += (int) ($row['leads_count'] ?? 0);
+    $totals['closing'] += (int) ($row['closing_count'] ?? 0);
+}
+
+function ads_group_total_label(array $totals): string
+{
+    return number_format((int) $totals['count'], 0, ',', '.') . ' laporan'
+        . ' | Pengajuan ' . money_idr((float) $totals['requested'])
+        . ' | Realisasi ' . money_idr((float) $totals['realization'])
+        . ' | Leads ' . number_format((int) $totals['leads'], 0, ',', '.')
+        . ' | Closing ' . number_format((int) $totals['closing'], 0, ',', '.');
 }
 
 function render_ad_leads_table(array $rows): void

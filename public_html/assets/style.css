@@ -1040,6 +1040,23 @@ tr.group-subheading td {
   font-weight: 900;
 }
 
+tr.group-heading span,
+tr.group-subheading span {
+  display: inline-flex;
+  margin-left: 10px;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: none;
+}
+
+tr.group-heading span {
+  color: #dbeafe;
+}
+
+tr.group-subheading span {
+  color: #334155;
+}
+
 .badge {
   display: inline-flex;
   padding: 6px 10px;

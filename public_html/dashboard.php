@@ -917,7 +917,7 @@ function render_gamification_panel(array $gamification): void
       <div class="game-card my-score-card">
         <span>Poin Saya</span>
         <?php if (is_array($myRank)): ?>
-          <strong><?= h(number_format((float) ($myRank['points'] ?? 0), 0, ',', '.')) ?> pts</strong>
+          <strong><?= h(number_format((float) ($myRank['points'] ?? 0), 0, ',', '.')) ?> poin</strong>
           <small>Rank #<?= h((string) ($myRank['rank'] ?? '-')) ?> - <?= h((string) ($myRank['staff_label'] ?? '-')) ?></small>
           <div class="badge-row">
             <?php foreach (($myRank['badges'] ?? []) as $badge): ?>
@@ -925,7 +925,7 @@ function render_gamification_panel(array $gamification): void
             <?php endforeach; ?>
           </div>
         <?php else: ?>
-          <strong>0 pts</strong>
+          <strong>0 poin</strong>
           <small>Belum ada poin pada periode ini</small>
         <?php endif; ?>
       </div>
@@ -965,7 +965,7 @@ function render_gamification_panel(array $gamification): void
             <span><?= h((string) (($row['wilayah'] ?? '') ?: '-')) ?> - <?= h((string) (($row['unit_name'] ?? '') ?: '-')) ?></span>
           </div>
           <div class="leader-metrics">
-            <b><?= h(number_format((float) ($row['points'] ?? 0), 0, ',', '.')) ?> pts</b>
+            <b><?= h(number_format((float) ($row['points'] ?? 0), 0, ',', '.')) ?> poin</b>
             <small><?= h(number_format((float) ($row['registrasi_total'] ?? 0), 0, ',', '.')) ?> registrasi - <?= h(percent_label((float) ($row['conversion_rate'] ?? 0))) ?></small>
           </div>
           <div class="badge-row compact">

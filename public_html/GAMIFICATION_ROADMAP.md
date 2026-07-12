@@ -44,9 +44,9 @@ Tampilan awal:
 
 ```text
 Top Performer Bulan Ini
-1. Staff A - 320 pts
-2. Staff B - 285 pts
-3. Staff C - 260 pts
+1. Staff A - 320 poin
+2. Staff B - 285 poin
+3. Staff C - 260 poin
 ```
 
 ### 2. Point System

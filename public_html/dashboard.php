@@ -818,29 +818,36 @@ function render_profile_page(array $profile, array $authUser, string $role): voi
         <?php endif; ?>
 
         <section class="profile-stat-header" id="ringkasan">
-          <article><span>Rank/League</span><strong><?= h((string) ($profile['league'] ?? 'Starter')) ?></strong><small>Berbasis XP, closing, dan konsistensi</small></article>
-          <article><span>Lama Bergabung</span><strong><?= h((string) ($profile['joined_label'] ?? '-')) ?></strong><small>Sejak akun dibuat</small></article>
-          <article><span>Status Performa</span><strong><?= h((string) ($profile['status_performa'] ?? 'Belum ada data')) ?></strong><small>Skor saat ini <?= h((string) $score) ?>/100</small></article>
+          <article><b>LG</b><div><span>League</span><strong><?= h((string) ($profile['league'] ?? 'Starter')) ?></strong><small>XP, closing, konsistensi</small></div></article>
+          <article><b>IN</b><div><span>In company</span><strong><?= h((string) ($profile['joined_label'] ?? '-')) ?></strong><small>Sejak akun dibuat</small></div></article>
+          <article><b>AU</b><div><span>Aura</span><strong><?= h((string) ($profile['status_performa'] ?? 'Belum ada data')) ?></strong><small>Skor <?= h((string) $score) ?>/100</small></div></article>
         </section>
 
         <section class="profile-hero-card">
+          <div class="profile-radial" style="--value: <?= h((string) $circle) ?>">
+            <div><span>Level</span><strong><?= h((string) ($level['number'] ?? 1)) ?></strong><small><?= h(number_format($xp, 0, ',', '.')) ?> XP</small></div>
+          </div>
           <div class="profile-hero-copy">
             <span class="eyebrow">Profil User</span>
             <h2><?= h((string) ($user['name'] ?? '-')) ?></h2>
             <p><?= h((string) (($user['bio_text'] ?? '') ?: 'Biodata singkat belum diisi.')) ?></p>
+            <div class="profile-core-metrics">
+              <div><span>Aktivitas</span><strong><?= h(number_format((int) ($stats['total_reports'] ?? 0), 0, ',', '.')) ?></strong></div>
+              <div><span>Konsistensi</span><strong><?= h(number_format((int) (($profile['streak']['current'] ?? 0)), 0, ',', '.')) ?> hari</strong></div>
+              <div><span>Konversi</span><strong><?= h(percent_label(rsm_dashboard_percent((float) ($stats['closing_total'] ?? 0), (float) ($stats['leads_total'] ?? 0)))) ?></strong></div>
+            </div>
             <div class="profile-identity-tags">
               <span><?= h((string) ($user['jabatan'] ?? '-')) ?></span>
               <span><?= h((string) (($user['campus_name'] ?? '') ?: 'Unit belum diatur')) ?></span>
               <span><?= h((string) (($user['regional'] ?? '') ?: 'Wilayah belum diatur')) ?></span>
             </div>
           </div>
-          <div class="profile-radial" style="--value: <?= h((string) $circle) ?>">
-            <div><strong><?= h((string) ($level['number'] ?? 1)) ?></strong><span>Level</span></div>
-          </div>
-          <div class="profile-core-metrics">
-            <div><span>Aktivitas</span><strong><?= h(number_format((int) ($stats['total_reports'] ?? 0), 0, ',', '.')) ?></strong></div>
-            <div><span>Konsistensi</span><strong><?= h(number_format((int) (($profile['streak']['current'] ?? 0)), 0, ',', '.')) ?> hari</strong></div>
-            <div><span>Konversi</span><strong><?= h(percent_label(rsm_dashboard_percent((float) ($stats['closing_total'] ?? 0), (float) ($stats['leads_total'] ?? 0)))) ?></strong></div>
+          <div class="profile-hero-portrait">
+            <?php if ($photoPath !== ''): ?>
+              <img src="<?= h($photoPath) ?>" alt="Foto profil <?= h((string) ($user['name'] ?? 'User')) ?>">
+            <?php else: ?>
+              <span><?= h($initial) ?></span>
+            <?php endif; ?>
           </div>
         </section>
 
@@ -1390,11 +1397,25 @@ function render_activity_table(array $rows, string $role): void
 
 function render_ads_table(array $rows, string $role): void
 {
+    $lastRegional = null;
+    $lastCampus = null;
     ?>
-    <div class="table-wrap"><table><thead><tr><th>Tanggal</th><th>Platform</th><th>Campaign</th><th>Anggaran</th><th>Realisasi</th><th>Leads</th><th>Closing</th><th>CPL</th><th>Status</th><th>Aksi</th></tr></thead><tbody>
-      <?php if (!$rows): ?><tr><td colspan="10" class="empty-row">Belum ada laporan anggaran iklan di database.</td></tr><?php endif; ?>
+    <div class="table-wrap"><table><thead><tr><th>Tanggal</th><th>Unit/Kampus</th><th>Platform</th><th>Campaign</th><th>Anggaran</th><th>Realisasi</th><th>Leads</th><th>Closing</th><th>CPL</th><th>Status</th><th>Aksi</th></tr></thead><tbody>
+      <?php if (!$rows): ?><tr><td colspan="11" class="empty-row">Belum ada laporan anggaran iklan di database.</td></tr><?php endif; ?>
       <?php foreach ($rows as $row): ?>
-        <tr><td><?= h((string) $row['report_date']) ?></td><td><?= h((string) ($row['platform'] ?: '-')) ?></td><td><?= h((string) ($row['campaign_name'] ?: $row['title'])) ?></td><td><?= h(money_idr((float) $row['budget_requested'])) ?></td><td><?= h(money_idr((float) $row['realization_amount'])) ?></td><td><?= h((string) $row['leads_count']) ?></td><td><?= h((string) ($row['closing_count'] ?? 0)) ?></td><td><?= h(money_idr((float) $row['cpl'])) ?></td><td><?= badge((string) $row['status']) ?></td><td><?= action_buttons($role, (int) $row['id'], (string) $row['status']) ?></td></tr>
+        <?php
+          $regional = (string) (($row['wilayah'] ?? '') ?: 'Regional belum diatur');
+          $campus = (string) (($row['unit_name'] ?? '') ?: 'Kampus belum diatur');
+          if ($regional !== $lastRegional):
+            $lastRegional = $regional;
+            $lastCampus = null;
+        ?>
+          <tr class="group-heading"><td colspan="11">Regional: <?= h($regional) ?></td></tr>
+        <?php endif; ?>
+        <?php if ($campus !== $lastCampus): $lastCampus = $campus; ?>
+          <tr class="group-subheading"><td colspan="11">Nama Kampus: <?= h($campus) ?></td></tr>
+        <?php endif; ?>
+        <tr><td><?= h((string) $row['report_date']) ?></td><td><?= h((string) (($row['unit_name'] ?? '') ?: '-')) ?></td><td><?= h((string) ($row['platform'] ?: '-')) ?></td><td><?= h((string) ($row['campaign_name'] ?: $row['title'])) ?></td><td><?= h(money_idr((float) $row['budget_requested'])) ?></td><td><?= h(money_idr((float) $row['realization_amount'])) ?></td><td><?= h((string) $row['leads_count']) ?></td><td><?= h((string) ($row['closing_count'] ?? 0)) ?></td><td><?= h(money_idr((float) $row['cpl'])) ?></td><td><?= badge((string) $row['status']) ?></td><td><?= action_buttons($role, (int) $row['id'], (string) $row['status']) ?></td></tr>
       <?php endforeach; ?>
     </tbody></table></div>
     <?php

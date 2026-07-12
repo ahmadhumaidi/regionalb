@@ -1024,6 +1024,22 @@ th {
   background: #f8fafc;
 }
 
+tr.group-heading td {
+  color: #ffffff;
+  border-bottom: 0;
+  background: #1f3a8a;
+  font-size: 14px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+tr.group-subheading td {
+  color: #0f172a;
+  border-bottom: 0;
+  background: #e0f2fe;
+  font-weight: 900;
+}
+
 .badge {
   display: inline-flex;
   padding: 6px 10px;

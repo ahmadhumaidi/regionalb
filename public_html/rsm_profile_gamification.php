@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 function rsm_profile_allowed_users(string $area, array $actor): array
 {
-    $sql = 'SELECT id, name, nik, username, role, jabatan, regional, area, campus_name, bio_text, photo_path, created_at FROM rsm_users WHERE is_active = 1 AND area = ?';
+    $sql = 'SELECT id, name, nik, username, role, jabatan, regional, area, campus_name, phone_number, work_duration, bio_text, photo_path, created_at FROM rsm_users WHERE is_active = 1 AND area = ?';
     $params = [$area];
     $role = (string) ($actor['role'] ?? '');
     if ($role === 'koordinator') {
@@ -41,6 +41,15 @@ function rsm_profile_target_user(string $area, array $actor, int $targetId): arr
 function rsm_profile_report_filter_sql(array $target, string $alias = 'r'): array
 {
     $prefix = $alias !== '' ? $alias . '.' : '';
+    $role = (string) ($target['role'] ?? '');
+    if (in_array($role, ['senior', 'mentor'], true)) {
+        return ['', []];
+    }
+    if ($role === 'koordinator') {
+        $regional = (string) ($target['regional'] ?? '');
+        return $regional !== '' ? [" AND {$prefix}wilayah = ?", [$regional]] : ['', []];
+    }
+
     $name = (string) ($target['name'] ?? '');
     $params = [(int) ($target['id'] ?? 0), $name, $name];
     $sql = " AND ({$prefix}user_id = ? OR {$prefix}staff_name = ? OR {$prefix}created_by_name = ?)";
@@ -138,7 +147,7 @@ function rsm_profile_gamification(string $area, array $actor, int $targetId = 0)
         'streak' => $streak,
         'competencies' => $competencies,
         'badges' => $badges,
-        'kpis' => rsm_profile_kpis($monthly, $stats),
+        'kpis' => rsm_profile_kpis($monthly, $stats, rsm_bdc_fu_hari_ini_for_user($target)),
         'activities' => $activities,
         'history' => $history,
         'score' => (int) round(array_sum(array_column($competencies, 'score')) / max(1, count($competencies))),
@@ -343,11 +352,11 @@ function rsm_profile_badges(array $stats, array $streak, array $competencies, ar
     ];
 }
 
-function rsm_profile_kpis(array $monthly, array $stats): array
+function rsm_profile_kpis(array $monthly, array $stats, int $bdcFuHariIni = 0): array
 {
     $kpis = [
         ['label' => 'Laporan harian bulan ini', 'value' => (int) ($monthly['reports'] ?? 0)],
-        ['label' => 'Follow up leads', 'value' => (int) ($monthly['follow_up'] ?? 0)],
+        ['label' => 'Follow Up Data BDC', 'value' => $bdcFuHariIni, 'note' => 'FU Hari Ini'],
         ['label' => 'Aktivitas marketing', 'value' => (int) ($monthly['marketing_reports'] ?? 0)],
         ['label' => 'Closing', 'value' => (int) ($monthly['closing'] ?? 0)],
         ['label' => 'Ketepatan laporan', 'value' => (int) ($stats['approved_reports'] ?? 0)],

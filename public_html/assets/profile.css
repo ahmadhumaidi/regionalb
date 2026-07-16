@@ -37,9 +37,10 @@
   position: sticky;
   top: 18px;
   display: grid;
-  gap: 18px;
+  align-content: start;
+  gap: 12px;
   min-height: calc(100vh - 72px);
-  padding: 22px 18px;
+  padding: 18px 16px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 24px;
   background: linear-gradient(180deg, rgba(33, 36, 70, 0.95), rgba(22, 24, 52, 0.96));
@@ -47,14 +48,14 @@
 }
 
 .profile-avatar-xl {
-  width: 94px;
-  height: 94px;
+  width: min(190px, 100%);
+  height: 190px;
   display: grid;
   place-items: center;
   justify-self: center;
   overflow: hidden;
   border: 2px solid rgba(255, 255, 255, 0.7);
-  border-radius: 18px;
+  border-radius: 22px;
   color: #fff;
   font-size: 34px;
   font-weight: 900;
@@ -70,31 +71,42 @@
 }
 
 .profile-game-sidebar > strong {
+  margin-top: 6px;
   text-align: center;
   font-size: 18px;
   line-height: 1.2;
 }
 
 .profile-game-sidebar > small {
-  margin-top: -12px;
+  margin-top: -8px;
   text-align: center;
   color: #b8bddc;
   font-weight: 700;
 }
 
 .profile-meta-list {
-  display: grid;
-  gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 8px;
+  margin-top: -4px;
+  text-align: center;
 }
 
 .profile-meta-list span {
-  padding: 9px 11px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 13px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
   color: #d8dcf5;
-  background: rgba(255, 255, 255, 0.06);
+  background: transparent;
   font-size: 12px;
   font-weight: 800;
+}
+
+.profile-meta-list span:not(:last-child)::after {
+  content: "•";
+  margin-left: 8px;
+  color: #94a3b8;
 }
 
 .profile-level-card {
@@ -662,4 +674,226 @@
 .profile-game-shell .profile-activity-list span,
 .profile-game-shell .profile-activity-list small {
   color: #ffffff;
+}
+
+/* Bright profile theme override */
+.main:has(.profile-game-shell) {
+  background:
+    radial-gradient(circle at 78% 18%, rgba(59, 130, 246, 0.10), transparent 28%),
+    radial-gradient(circle at 28% 8%, rgba(34, 197, 94, 0.08), transparent 28%),
+    #f3f6fb;
+}
+
+.main:has(.profile-game-shell) .topbar,
+.main:has(.profile-game-shell) .alert:not(.impersonation-banner),
+.profile-game-shell,
+.profile-game-sidebar > strong,
+.profile-level-card strong,
+.profile-stat-header strong,
+.profile-metric-grid strong,
+.profile-radial strong,
+.profile-hero-copy h2,
+.profile-core-metrics strong,
+.profile-section-card .panel-head h2,
+.profile-kpi-row span,
+.profile-skill-list b,
+.profile-badge-grid strong,
+.profile-activity-list strong,
+.profile-game-shell h1,
+.profile-game-shell h2,
+.profile-game-shell h3,
+.profile-game-shell h4,
+.profile-game-shell strong,
+.profile-game-shell b {
+  color: #111827;
+}
+
+.main:has(.profile-game-shell) .topbar p,
+.main:has(.profile-game-shell) .eyebrow,
+.profile-game-sidebar > small,
+.profile-level-card span,
+.profile-level-card small,
+.profile-section-card small,
+.profile-section-card em,
+.profile-user-switch label,
+.profile-stat-header span,
+.profile-metric-grid span,
+.profile-kpi-row strong,
+.profile-skill-list span,
+.profile-radial span,
+.profile-radial small,
+.profile-hero-copy p,
+.profile-core-metrics span,
+.profile-section-card .panel-head span,
+.profile-kpi-row small,
+.profile-kpi-row em,
+.profile-badge-grid small,
+.profile-history-chart span,
+.profile-history-chart small,
+.profile-activity-list span,
+.profile-activity-list small,
+.profile-game-shell .muted,
+.profile-form label span,
+.profile-game-shell p,
+.profile-game-shell span,
+.profile-game-shell small,
+.profile-game-shell em,
+.profile-game-shell label,
+.profile-game-shell time,
+.profile-game-shell a {
+  color: #64748b;
+}
+
+.main:has(.profile-game-shell) .user-pill,
+.main:has(.profile-game-shell) .role-form label,
+.main:has(.profile-game-shell) .logout,
+.main:has(.profile-game-shell) .icon-btn,
+.profile-user-switch select,
+.profile-form input,
+.profile-form textarea {
+  border-color: #dbe4f0;
+  color: #111827;
+  background: #fff;
+}
+
+.profile-game-sidebar,
+.profile-stat-header article,
+.profile-metric-grid article,
+.profile-section-card,
+.profile-hero-card {
+  border-color: #dbe4f0;
+  background: #fff;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.08);
+}
+
+.profile-avatar-xl {
+  border-color: #fff;
+  color: #fff;
+  box-shadow: 0 16px 30px rgba(37, 99, 235, 0.18);
+}
+
+.profile-meta-list span,
+.profile-identity-tags span,
+.profile-kpi-row,
+.profile-badge-grid article,
+.profile-activity-list article {
+  border-color: #dbe4f0;
+  color: #334155;
+  background: #f8fafc;
+}
+
+.profile-level-card,
+.profile-core-metrics div,
+.profile-section-menu a:hover,
+.profile-section-menu a:first-child {
+  background: #eef4ff;
+}
+
+.profile-section-menu a {
+  color: #334155;
+}
+
+.profile-xp-bar,
+.profile-skill-list i,
+.profile-history-chart i {
+  background: #e2e8f0;
+}
+
+.profile-radial {
+  background:
+    radial-gradient(circle, #fff 58%, transparent 59%),
+    conic-gradient(#35df5c calc(var(--value) * 1%), #e2e8f0 0);
+}
+
+.profile-radial > div {
+  background: #f8fafc;
+}
+
+.profile-hero-portrait {
+  color: #2563eb;
+  background: linear-gradient(135deg, #e0f2fe, #bfdbfe);
+}
+
+.profile-badge-grid article.unlocked {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.12), rgba(59, 130, 246, 0.10));
+}
+
+.profile-badge-grid span {
+  color: #14532d;
+  background: #bbf7d0;
+}
+
+.profile-badge-grid .locked span {
+  color: #64748b;
+  background: #e2e8f0;
+}
+
+.profile-game-shell .profile-kpi-row strong {
+  color: #334155;
+}
+
+.profile-game-shell .profile-kpi-row small,
+.profile-game-shell .profile-kpi-row em {
+  color: #64748b;
+}
+
+.profile-game-shell .profile-kpi-row > span {
+  color: #475569;
+}
+
+.profile-activity-list time {
+  color: #15803d;
+}
+
+.profile-game-shell .profile-activity-list strong {
+  color: #111827;
+}
+
+.profile-game-shell .profile-activity-list span,
+.profile-game-shell .profile-activity-list small {
+  color: #64748b;
+}
+
+.profile-game-shell .profile-avatar-xl {
+  width: min(178px, 100%);
+  height: 168px;
+  border-radius: 22px;
+}
+
+.profile-game-shell .profile-game-sidebar {
+  align-content: start;
+  gap: 8px;
+}
+
+.profile-game-shell .profile-game-sidebar > strong {
+  margin-top: 6px;
+  margin-bottom: 0;
+}
+
+.profile-game-shell .profile-game-sidebar > small {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.profile-game-shell .profile-meta-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 8px;
+  margin-top: 2px;
+}
+
+.profile-game-shell .profile-meta-list span {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: #64748b;
+  background: transparent;
+  box-shadow: none;
+}
+
+.profile-game-shell .profile-meta-list span:not(:last-child)::after {
+  content: "•";
+  margin-left: 8px;
+  color: #94a3b8;
 }

@@ -54,6 +54,26 @@
     areaSelect.addEventListener('change', () => syncRegionalOptions(areaSelect));
   });
 
+  const syncClosingStatusTone = (select) => {
+    const isClosing = select.value.trim().toLowerCase() === 'closing';
+    select.classList.toggle('is-closing', isClosing);
+    if (isClosing) {
+      select.style.borderColor = '#93c5fd';
+      select.style.background = '#dbeafe';
+      select.style.color = '#1e3a8a';
+      select.style.fontWeight = '700';
+    } else {
+      select.style.borderColor = '';
+      select.style.background = '';
+      select.style.color = '';
+      select.style.fontWeight = '';
+    }
+  };
+  document.querySelectorAll('.compact-status-select').forEach((select) => {
+    syncClosingStatusTone(select);
+    select.addEventListener('change', () => syncClosingStatusTone(select));
+  });
+
   document.addEventListener('click', (event) => {
     const printRekapButton = event.target.closest('.js-print-rekap');
     if (printRekapButton) {

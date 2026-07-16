@@ -816,6 +816,38 @@ button:active {
   flex: 1;
 }
 
+.dashboard-grid .campus-closing-list,
+.dashboard-grid .top-staff-list {
+  grid-template-rows: repeat(5, minmax(62px, 1fr));
+}
+
+.dashboard-grid .campus-closing-row,
+.dashboard-grid .top-staff-row {
+  min-height: 0;
+  height: 100%;
+}
+
+.dashboard-grid .campus-closing-row {
+  align-items: center;
+  padding: 9px 10px;
+  border-radius: 10px;
+}
+
+.dashboard-grid .campus-closing-row strong {
+  font-size: 14px;
+}
+
+.dashboard-grid .campus-closing-row span {
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.dashboard-grid .campus-closing-row b {
+  min-width: 34px;
+  font-size: 16px;
+  text-align: right;
+}
+
 .panel {
   padding: 18px;
   margin-bottom: 18px;
@@ -1184,14 +1216,16 @@ button:active {
 }
 
 .top-staff-row {
-  grid-template-columns: 34px 36px minmax(0, 1fr) auto;
-  min-height: 56px;
+  position: relative;
+  overflow: hidden;
+  grid-template-columns: 34px 42px minmax(0, 1fr) auto;
+  min-height: 62px;
 }
 
 .top-staff-avatar {
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   place-items: center;
   overflow: hidden;
   border-radius: 10px;
@@ -1224,6 +1258,21 @@ button:active {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.top-staff-row .top-staff-progress {
+  position: absolute;
+  left: 0;
+  right: auto;
+  bottom: 0;
+  z-index: 2;
+  display: block !important;
+  height: 4px !important;
+  min-width: 18px;
+  border-radius: 0 999px 999px 0;
+  background: var(--blue) !important;
+  transform-origin: left center;
+  animation: fill-bar 620ms var(--ease-soft) both;
 }
 
 .bdc-table {

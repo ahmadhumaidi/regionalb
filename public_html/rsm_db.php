@@ -4588,6 +4588,30 @@ function rsm_collab_cache_read(): array
     return is_array($decoded) ? $decoded : [];
 }
 
+function rsm_collab_build_snapshot_entry(string $reportName, array $report, string $error = ''): array
+{
+    $rows = $report['tables'][0] ?? [];
+    $rows = is_array($rows) ? $rows : [];
+    $columnCount = 0;
+    foreach ($rows as $row) {
+        if (is_array($row)) {
+            $columnCount = max($columnCount, count($row));
+        }
+    }
+
+    return [
+        'name' => $reportName,
+        'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
+        'source_mode' => (string) ($report['source_mode'] ?? ''),
+        'cached_at' => (string) ($report['cached_at'] ?? ''),
+        'created_at' => (string) ($report['created_at'] ?? ''),
+        'error' => $error,
+        'rows' => $rows,
+        'row_count' => count($rows),
+        'column_count' => $columnCount,
+    ];
+}
+
 function rsm_collab_cache_snapshot(): array
 {
     $cache = rsm_collab_cache_read();
@@ -4597,31 +4621,31 @@ function rsm_collab_cache_snapshot(): array
     $snapshot = [];
     foreach (rsm_collab_known_reports() as $reportName) {
         $report = (array) ($reports[$reportName] ?? []);
-        $rows = $report['tables'][0] ?? [];
-        $rows = is_array($rows) ? $rows : [];
-        $columnCount = 0;
-        foreach ($rows as $row) {
-            if (is_array($row)) {
-                $columnCount = max($columnCount, count($row));
-            }
-        }
-        $snapshot[$reportName] = [
-            'name' => $reportName,
-            'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
-            'source_mode' => (string) ($report['source_mode'] ?? ''),
-            'cached_at' => (string) ($report['cached_at'] ?? ''),
-            'created_at' => (string) ($report['created_at'] ?? ''),
-            'error' => (string) ($errors[$reportName] ?? ''),
-            'rows' => $rows,
-            'row_count' => count($rows),
-            'column_count' => $columnCount,
-        ];
+        $snapshot[$reportName] = rsm_collab_build_snapshot_entry($reportName, $report, (string) ($errors[$reportName] ?? ''));
     }
 
     return [
         'synced_at' => (string) ($cache['synced_at'] ?? ''),
         'reports' => $snapshot,
     ];
+}
+
+function rsm_collab_available_report_months(string $reportName): array
+{
+    $stmt = rsm_pdo()->prepare(
+        'SELECT report_month FROM rsm_collab_report_archive WHERE report_name = ? ORDER BY report_month DESC'
+    );
+    $stmt->execute([$reportName]);
+    return array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+}
+
+function rsm_collab_archive_snapshot_entry(string $reportName, string $month): array
+{
+    $report = rsm_collab_report_from_archive($reportName, $month);
+    if ($report === []) {
+        return rsm_collab_build_snapshot_entry($reportName, [], 'Belum ada arsip untuk bulan ini.');
+    }
+    return rsm_collab_build_snapshot_entry($reportName, $report);
 }
 
 function rsm_collab_cache_write(array $payload): void

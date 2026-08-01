@@ -942,13 +942,28 @@ if ($page === 'rekap' && $dbError === null) {
         </section>
       <?php elseif ($page === 'sumber-collab'): ?>
         <?php
+          $collabMonthNames = ['01' => 'Januari', '02' => 'Februari', '03' => 'Maret', '04' => 'April', '05' => 'Mei', '06' => 'Juni', '07' => 'Juli', '08' => 'Agustus', '09' => 'September', '10' => 'Oktober', '11' => 'November', '12' => 'Desember'];
+          $collabMonthLabel = static function (string $month) use ($collabMonthNames): string {
+              if (!preg_match('/^(\d{4})-(\d{2})$/', $month, $m)) {
+                  return $month;
+              }
+              return ($collabMonthNames[$m[2]] ?? $m[2]) . ' ' . $m[1];
+          };
+
           $collabReports = (array) ($collabSourceSnapshot['reports'] ?? []);
           $collabReportNames = array_keys($collabReports);
           $activeCollabReport = (string) ($_GET['report'] ?? '');
           if (!in_array($activeCollabReport, $collabReportNames, true)) {
               $activeCollabReport = $collabReportNames[0] ?? '';
           }
-          $activeReportData = $collabReports[$activeCollabReport] ?? ['rows' => [], 'row_count' => 0, 'column_count' => 0, 'source_url' => '', 'source_mode' => '', 'cached_at' => '', 'created_at' => '', 'error' => ''];
+          $collabAvailableMonths = $activeCollabReport !== '' ? rsm_collab_available_report_months($activeCollabReport) : [];
+          $activeCollabMonth = (string) ($_GET['month'] ?? '');
+          if ($activeCollabMonth !== '' && !in_array($activeCollabMonth, $collabAvailableMonths, true)) {
+              $activeCollabMonth = '';
+          }
+          $activeReportData = $activeCollabMonth !== ''
+              ? rsm_collab_archive_snapshot_entry($activeCollabReport, $activeCollabMonth)
+              : ($collabReports[$activeCollabReport] ?? ['rows' => [], 'row_count' => 0, 'column_count' => 0, 'source_url' => '', 'source_mode' => '', 'cached_at' => '', 'created_at' => '', 'error' => '']);
         ?>
         <?php render_sync_health_panel($syncHealth); ?>
         <section class="panel">
@@ -960,6 +975,22 @@ if ($page === 'rekap' && $dbError === null) {
               <a class="<?= $reportName === $activeCollabReport ? 'active' : '' ?>" href="?page=sumber-collab&report=<?= rawurlencode($reportName) ?><?= h($roleQuery) ?>"><?= h($reportName) ?></a>
             <?php endforeach; ?>
           </div>
+          <?php if ($collabAvailableMonths !== []): ?>
+            <form method="get" class="role-form">
+              <input type="hidden" name="page" value="sumber-collab">
+              <input type="hidden" name="report" value="<?= h($activeCollabReport) ?>">
+              <?php if ($role !== 'staff'): ?><input type="hidden" name="role" value="<?= h($role) ?>"><?php endif; ?>
+              <label>
+                <span>Periode</span>
+                <select name="month" onchange="this.form.submit()">
+                  <option value="">Live (cache terkini)</option>
+                  <?php foreach ($collabAvailableMonths as $monthValue): ?>
+                    <option value="<?= h($monthValue) ?>" <?= $activeCollabMonth === $monthValue ? 'selected' : '' ?>><?= h($collabMonthLabel($monthValue)) ?></option>
+                  <?php endforeach; ?>
+                </select>
+              </label>
+            </form>
+          <?php endif; ?>
           <?php if ((string) ($activeReportData['error'] ?? '') !== ''): ?>
             <div class="alert alert-danger"><?= h((string) $activeReportData['error']) ?></div>
           <?php endif; ?>

@@ -2211,6 +2211,9 @@ function render_edit_form(array $report, string $role, array $references, ?array
 function render_edit_input(string $field, string $name, array $report, array $options, array $references, ?array $authUser = null): void
 {
     $value = (string) ($report[$name] ?? '');
+    if (in_array($name, ['budget_requested', 'budget_approved', 'realization_amount', 'cpl'], true) && $value !== '' && is_numeric($value)) {
+        $value = rtrim(rtrim(number_format((float) $value, 2, '.', ''), '0'), '.');
+    }
     if (str_contains(strtolower($field), 'tanggal')) {
         ?><input type="date" name="<?= h($name) ?>" value="<?= h($value !== '' ? $value : date('Y-m-d')) ?>"><?php
     } elseif ($field === 'Periode Iklan') {

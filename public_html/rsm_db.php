@@ -558,6 +558,18 @@ function rsm_default_ad_period(string $date = ''): string
     return rsm_month_name_id((int) date('n', $timestamp)) . ' ' . date('Y', $timestamp);
 }
 
+function rsm_ad_period_options(int $monthsBack = 11, int $monthsForward = 1): array
+{
+    $options = [];
+    $base = new DateTimeImmutable('first day of this month');
+    for ($offset = $monthsForward; $offset >= -$monthsBack; $offset--) {
+        $target = $base->modify(($offset >= 0 ? '+' : '') . $offset . ' months');
+        $options[] = rsm_month_name_id((int) $target->format('n')) . ' ' . $target->format('Y');
+    }
+
+    return $options;
+}
+
 function rsm_number_input(string $key): float
 {
     $value = preg_replace('/[^0-9,.-]/', '', rsm_input($key)) ?? '';

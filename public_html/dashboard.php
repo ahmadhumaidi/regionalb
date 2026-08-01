@@ -296,7 +296,12 @@ try {
         ];
     }
     $ads = rsm_reports($area, 'ads', $page === 'anggaran' ? 500 : 50, $authUser, $adsReportFilters);
+    $adBudgetPeriodOptions = rsm_ad_period_options();
     $adBudgetPeriod = rsm_default_ad_period((string) ($dashboardFilters['date_from'] ?? date('Y-m-d')));
+    $adBudgetPeriodRequested = trim((string) ($_GET['ad_period'] ?? ''));
+    if ($page === 'anggaran' && $adBudgetPeriodRequested !== '' && in_array($adBudgetPeriodRequested, $adBudgetPeriodOptions, true)) {
+        $adBudgetPeriod = $adBudgetPeriodRequested;
+    }
     $adBudgetSummaries = $page === 'anggaran' ? rsm_ad_budget_summaries($area, $adBudgetPeriod, $authUser) : [];
     if ($page === 'konten') {
         $socialContent = rsm_social_summary($area, $dashboardFilters, $authUser);
@@ -1137,7 +1142,7 @@ if ($page === 'rekap' && $dbError === null) {
           <article class="summary-card tone-blue"><span>Leads iklan</span><strong><?= h(number_format((int) $adsPageTotals['leads'], 0, ',', '.')) ?></strong><small>Total dari tabel aktif</small></article>
           <article class="summary-card tone-cyan"><span>Closing iklan</span><strong><?= h(number_format((int) $adsPageTotals['closing'], 0, ',', '.')) ?></strong><small>Total dari tabel aktif</small></article>
         </section>
-        <?php render_ad_budget_limit_panel($adBudgetPeriod, $adBudgetSummaries, $references, $authUser); ?>
+        <?php render_ad_budget_limit_panel($adBudgetPeriod, $adBudgetPeriodOptions, $adBudgetSummaries, $references, $authUser, $role); ?>
         <?php if ($role === 'koordinator'): ?>
         <?php render_form_panel('Pengajuan Iklan', [
             'Tanggal', 'Periode Iklan', 'Wilayah', 'Unit/Kampus', 'Platform iklan', 'Anggaran diajukan'
@@ -1993,7 +1998,7 @@ function field_name_for(string $field): string
     return $map[$field] ?? strtolower(preg_replace('/[^a-z0-9]+/i', '_', $field) ?? $field);
 }
 
-function render_ad_budget_limit_panel(string $period, array $summaries, array $references, ?array $authUser): void
+function render_ad_budget_limit_panel(string $period, array $periodOptions, array $summaries, array $references, ?array $authUser, string $role): void
 {
     $canManage = rsm_can_manage_ad_budget($authUser);
     ?>
@@ -2003,6 +2008,18 @@ function render_ad_budget_limit_panel(string $period, array $summaries, array $r
           <h2>Plafon Anggaran Regional</h2>
           <span>Periode <?= h($period) ?>, pengajuan koordinator mengikuti sisa plafon regional.</span>
         </div>
+        <form method="get" class="role-form ad-period-form">
+          <input type="hidden" name="page" value="anggaran">
+          <?php if ($role !== 'staff'): ?><input type="hidden" name="role" value="<?= h($role) ?>"><?php endif; ?>
+          <label>
+            <span>Lihat periode</span>
+            <select name="ad_period" onchange="this.form.submit()">
+              <?php foreach ($periodOptions as $periodOption): ?>
+                <option value="<?= h($periodOption) ?>" <?= $periodOption === $period ? 'selected' : '' ?>><?= h($periodOption) ?></option>
+              <?php endforeach; ?>
+            </select>
+          </label>
+        </form>
       </div>
       <?php if ($summaries): ?>
         <div class="ad-budget-limit-grid">

@@ -4592,10 +4592,24 @@ function rsm_collab_build_snapshot_entry(string $reportName, array $report, stri
 {
     $rows = $report['tables'][0] ?? [];
     $rows = is_array($rows) ? $rows : [];
+
+    $dataStart = 0;
+    if ($rows !== []) {
+        $layout = rsm_collab_layout($rows);
+        $dataStart = max(0, min((int) ($layout['data_start_index'] ?? 0), count($rows) - 1));
+    }
+
     $columnCount = 0;
-    foreach ($rows as $row) {
+    foreach (array_slice($rows, $dataStart, null, true) as $row) {
         if (is_array($row)) {
             $columnCount = max($columnCount, count($row));
+        }
+    }
+    if ($columnCount === 0) {
+        foreach ($rows as $row) {
+            if (is_array($row)) {
+                $columnCount = max($columnCount, count($row));
+            }
         }
     }
 

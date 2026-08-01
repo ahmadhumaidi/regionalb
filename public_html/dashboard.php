@@ -965,55 +965,90 @@ if ($page === 'rekap' && $dbError === null) {
               ? rsm_collab_archive_snapshot_entry($activeCollabReport, $activeCollabMonth)
               : ($collabReports[$activeCollabReport] ?? ['rows' => [], 'row_count' => 0, 'column_count' => 0, 'source_url' => '', 'source_mode' => '', 'cached_at' => '', 'created_at' => '', 'error' => '']);
         ?>
+        <?php
+          $collabRows = (array) ($activeReportData['rows'] ?? []);
+          $collabHeaderRowCount = 2;
+          if ($collabRows !== []) {
+              $collabLayout = rsm_collab_layout($collabRows);
+              $collabHeaderRowCount = max(1, min((int) ($collabLayout['data_start_index'] ?? 2), count($collabRows)));
+          }
+          $collabModeLabels = [
+              'cache_auto' => 'Otomatis (cron)',
+              'archive' => 'Arsip bulanan',
+              'live_url' => 'Live',
+              'backfill_range' => 'Backfill',
+              'history_snapshot' => 'Snapshot histori',
+              'live_url_uncached' => 'Live (tanpa cache)',
+          ];
+          $collabModeRaw = (string) ($activeReportData['source_mode'] ?? '');
+          $collabModeLabel = $collabModeLabels[$collabModeRaw] ?? ($collabModeRaw ?: '-');
+        ?>
         <?php render_sync_health_panel($syncHealth); ?>
-        <section class="panel">
+        <section class="panel collab-source-panel">
           <div class="panel-head">
             <div><h2>Sumber Data Collab (cb.web.id)</h2><span>Snapshot cache terakhir tersinkron<?= !empty($collabSourceSnapshot['synced_at']) ? ' - ' . h((string) $collabSourceSnapshot['synced_at']) . ' WIB' : ' - belum ada sinkronisasi' ?></span></div>
           </div>
-          <div class="filter-tabs">
-            <?php foreach ($collabReportNames as $reportName): ?>
-              <a class="<?= $reportName === $activeCollabReport ? 'active' : '' ?>" href="?page=sumber-collab&report=<?= rawurlencode($reportName) ?><?= h($roleQuery) ?>"><?= h($reportName) ?></a>
-            <?php endforeach; ?>
+          <div class="collab-toolbar">
+            <div class="filter-tabs">
+              <?php foreach ($collabReportNames as $reportName): ?>
+                <a class="<?= $reportName === $activeCollabReport ? 'active' : '' ?>" href="?page=sumber-collab&report=<?= rawurlencode($reportName) ?><?= h($roleQuery) ?>"><?= h($reportName) ?></a>
+              <?php endforeach; ?>
+            </div>
+            <?php if ($collabAvailableMonths !== []): ?>
+              <form method="get" class="role-form collab-period-form">
+                <input type="hidden" name="page" value="sumber-collab">
+                <input type="hidden" name="report" value="<?= h($activeCollabReport) ?>">
+                <?php if ($role !== 'staff'): ?><input type="hidden" name="role" value="<?= h($role) ?>"><?php endif; ?>
+                <label>
+                  <span>Periode</span>
+                  <select name="month" onchange="this.form.submit()">
+                    <option value="">Live (cache terkini)</option>
+                    <?php foreach ($collabAvailableMonths as $monthValue): ?>
+                      <option value="<?= h($monthValue) ?>" <?= $activeCollabMonth === $monthValue ? 'selected' : '' ?>><?= h($collabMonthLabel($monthValue)) ?></option>
+                    <?php endforeach; ?>
+                  </select>
+                </label>
+              </form>
+            <?php endif; ?>
           </div>
-          <?php if ($collabAvailableMonths !== []): ?>
-            <form method="get" class="role-form">
-              <input type="hidden" name="page" value="sumber-collab">
-              <input type="hidden" name="report" value="<?= h($activeCollabReport) ?>">
-              <?php if ($role !== 'staff'): ?><input type="hidden" name="role" value="<?= h($role) ?>"><?php endif; ?>
-              <label>
-                <span>Periode</span>
-                <select name="month" onchange="this.form.submit()">
-                  <option value="">Live (cache terkini)</option>
-                  <?php foreach ($collabAvailableMonths as $monthValue): ?>
-                    <option value="<?= h($monthValue) ?>" <?= $activeCollabMonth === $monthValue ? 'selected' : '' ?>><?= h($collabMonthLabel($monthValue)) ?></option>
-                  <?php endforeach; ?>
-                </select>
-              </label>
-            </form>
-          <?php endif; ?>
           <?php if ((string) ($activeReportData['error'] ?? '') !== ''): ?>
             <div class="alert alert-danger"><?= h((string) $activeReportData['error']) ?></div>
           <?php endif; ?>
-          <p>
-            <strong>URL sumber:</strong> <?= h((string) ($activeReportData['source_url'] ?? '')) ?><br>
-            <strong>Mode:</strong> <?= h((string) (($activeReportData['source_mode'] ?? '') ?: '-')) ?>
-            - <strong>Diambil:</strong> <?= h((string) (($activeReportData['created_at'] ?? '') ?: '-')) ?>
-            - <strong>Cache disimpan:</strong> <?= h((string) (($activeReportData['cached_at'] ?? '') ?: '-')) ?>
-            - <strong><?= h(number_format((int) ($activeReportData['row_count'] ?? 0), 0, ',', '.')) ?></strong> baris x
-            <strong><?= h(number_format((int) ($activeReportData['column_count'] ?? 0), 0, ',', '.')) ?></strong> kolom
-          </p>
+          <div class="meta-chips">
+            <span class="meta-chip"><b>Mode</b><?= h($collabModeLabel) ?></span>
+            <span class="meta-chip"><b>Diambil</b><?= h((string) (($activeReportData['created_at'] ?? '') ?: '-')) ?></span>
+            <span class="meta-chip"><b>Cache disimpan</b><?= h((string) (($activeReportData['cached_at'] ?? '') ?: '-')) ?></span>
+            <span class="meta-chip"><b>Ukuran</b><?= h(number_format((int) ($activeReportData['row_count'] ?? 0), 0, ',', '.')) ?> baris &times; <?= h(number_format((int) ($activeReportData['column_count'] ?? 0), 0, ',', '.')) ?> kolom</span>
+            <?php if ((string) ($activeReportData['source_url'] ?? '') !== ''): ?>
+              <a class="meta-chip meta-chip-link" href="<?= h((string) $activeReportData['source_url']) ?>" target="_blank" rel="noopener">Buka sumber asli &#8599;</a>
+            <?php endif; ?>
+          </div>
           <div class="table-wrap">
-            <table>
-              <tbody>
-                <?php if (empty($activeReportData['rows'])): ?><tr><td class="empty-row">Belum ada data tersinkron untuk sumber ini.</td></tr><?php endif; ?>
-                <?php foreach ((array) $activeReportData['rows'] as $rowIndex => $row): ?>
-                  <tr>
-                    <?php foreach ((array) $row as $cell): ?>
-                      <td><?= h((string) $cell) ?></td>
-                    <?php endforeach; ?>
-                  </tr>
-                <?php endforeach; ?>
-              </tbody>
+            <table class="collab-raw-table">
+              <?php if ($collabRows === []): ?>
+                <tbody><tr><td class="empty-row">Belum ada data tersinkron untuk sumber ini.</td></tr></tbody>
+              <?php else: ?>
+                <thead>
+                  <?php $collabDataWidth = (int) ($activeReportData['column_count'] ?? 0); ?>
+                  <?php foreach (array_slice($collabRows, 0, $collabHeaderRowCount) as $row): ?>
+                    <tr>
+                      <?php foreach (array_slice((array) $row, 0, $collabDataWidth > 0 ? $collabDataWidth : null) as $cell): ?>
+                        <th><?= h((string) $cell) ?></th>
+                      <?php endforeach; ?>
+                    </tr>
+                  <?php endforeach; ?>
+                </thead>
+                <tbody>
+                  <?php foreach (array_slice($collabRows, $collabHeaderRowCount, null, true) as $row): ?>
+                    <tr>
+                      <?php foreach ((array) $row as $cell): ?>
+                        <?php $cellText = (string) $cell; $isNumericCell = $cellText !== '' && preg_match('/^-?\d+([.,]\d+)?$/', trim($cellText)) === 1; ?>
+                        <td class="<?= $isNumericCell ? 'num' : '' ?>"><?= h($cellText) ?></td>
+                      <?php endforeach; ?>
+                    </tr>
+                  <?php endforeach; ?>
+                </tbody>
+              <?php endif; ?>
             </table>
           </div>
         </section>

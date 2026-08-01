@@ -2099,6 +2099,123 @@ tr.group-subheading span {
   background: var(--blue);
 }
 
+.collab-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.collab-toolbar .filter-tabs {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.collab-period-form {
+  margin: 0;
+}
+
+.collab-period-form label {
+  display: grid;
+  gap: 4px;
+}
+
+.collab-period-form label span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.collab-period-form select {
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  font-size: 13px;
+}
+
+.meta-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.3;
+}
+
+.meta-chip b {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+}
+
+.meta-chip-link {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: var(--blue);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.collab-source-panel .table-wrap {
+  max-height: 70vh;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.collab-raw-table {
+  min-width: 100%;
+}
+
+.collab-raw-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  box-shadow: 0 1px 0 var(--line);
+}
+
+.collab-raw-table tbody tr:nth-child(even) {
+  background: #f8fafc;
+}
+
+.collab-raw-table tbody tr:hover {
+  background: #eff6ff;
+}
+
+.collab-raw-table td.num,
+.collab-raw-table th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.collab-raw-table th:first-child,
+.collab-raw-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: inherit;
+  box-shadow: 1px 0 0 var(--line);
+}
+
+.collab-raw-table thead th:first-child {
+  z-index: 3;
+}
+
 .inline-action {
   display: inline-flex;
   align-items: center;

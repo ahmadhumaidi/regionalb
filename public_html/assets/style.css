@@ -2221,6 +2221,17 @@ tr.group-subheading span {
   box-shadow: 1px 1px 0 var(--line);
 }
 
+.collab-raw-table tbody tr.collab-subtotal-row {
+  background: #1d4ed8;
+  color: #fff;
+}
+
+.collab-raw-table tbody tr.collab-subtotal-row td {
+  color: #fff;
+  font-weight: 800;
+  border-bottom-color: rgba(255, 255, 255, .18);
+}
+
 .collab-raw-table thead th:first-child {
   z-index: 3;
 }

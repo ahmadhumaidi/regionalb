@@ -1040,12 +1040,7 @@ if ($page === 'rekap' && $dbError === null) {
                 </thead>
                 <tbody>
                   <?php foreach (array_slice($collabRows, $collabHeaderRowCount, null, true) as $row): ?>
-                    <tr>
-                      <?php foreach ((array) $row as $cell): ?>
-                        <?php $cellText = (string) $cell; $isNumericCell = $cellText !== '' && preg_match('/^-?\d+([.,]\d+)?$/', trim($cellText)) === 1; ?>
-                        <td class="<?= $isNumericCell ? 'num' : '' ?>"><?= h($cellText) ?></td>
-                      <?php endforeach; ?>
-                    </tr>
+                    <?php render_collab_data_row((array) $row); ?>
                   <?php endforeach; ?>
                 </tbody>
               <?php endif; ?>
@@ -1419,6 +1414,38 @@ function render_login_page(?string $error): void
     </body>
     </html>
     <?php
+}
+
+function render_collab_data_row(array $row): void
+{
+    $row = array_values($row);
+    $firstCell = trim((string) ($row[0] ?? ''));
+    $isSubtotalRow = $firstCell !== '' && stripos($firstCell, 'Total ') === 0;
+
+    if (!$isSubtotalRow) {
+        echo '<tr>';
+        foreach ($row as $cell) {
+            $cellText = (string) $cell;
+            $isNumericCell = $cellText !== '' && preg_match('/^-?\d+([.,]\d+)?$/', trim($cellText)) === 1;
+            echo '<td class="' . ($isNumericCell ? 'num' : '') . '">' . h($cellText) . '</td>';
+        }
+        echo '</tr>';
+        return;
+    }
+
+    $labelWidth = 1;
+    while ($labelWidth < count($row) && trim((string) $row[$labelWidth]) === $firstCell) {
+        $labelWidth++;
+    }
+
+    echo '<tr class="collab-subtotal-row">';
+    echo '<td' . ($labelWidth > 1 ? ' colspan="' . $labelWidth . '"' : '') . '>' . h($firstCell) . '</td>';
+    foreach (array_slice($row, $labelWidth) as $cell) {
+        $cellText = (string) $cell;
+        $isNumericCell = $cellText !== '' && preg_match('/^-?\d+([.,]\d+)?$/', trim($cellText)) === 1;
+        echo '<td class="' . ($isNumericCell ? 'num' : '') . '">' . h($cellText) . '</td>';
+    }
+    echo '</tr>';
 }
 
 function collab_header_runs(array $row): array

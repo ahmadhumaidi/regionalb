@@ -4733,7 +4733,7 @@ function rsm_collab_ingest_daily_metrics(string $reportName, array $report): voi
                 }
                 $regionalLabel = trim((string) ($row[2] ?? ''));
                 $campusName = trim((string) ($row[3] ?? ''));
-                if ($campusName === '' || !preg_match('/Regional\s+([1-7])/i', $regionalLabel, $match)) {
+                if ($campusName === '' || stripos($campusName, 'Total ') === 0 || !preg_match('/Regional\s+([1-7])/i', $regionalLabel, $match)) {
                     continue;
                 }
                 $regional = 'Regional ' . $match[1];

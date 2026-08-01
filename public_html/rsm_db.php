@@ -5013,7 +5013,57 @@ function rsm_collab_fetch_plain_html(string $url): string
     return is_string($html) ? $html : '';
 }
 
-function rsm_collab_report_from_url(string $reportName): array
+function rsm_collab_curl_request(string $url, ?string $cookieFile, ?array $postFields): string
+{
+    $ch = curl_init($url);
+    if ($ch === false) {
+        return '';
+    }
+    $opts = [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_TIMEOUT => 25,
+        CURLOPT_USERAGENT => 'RegionalB-Dashboard/1.0',
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
+        CURLOPT_HTTPHEADER => ['Accept: text/html,application/xhtml+xml'],
+    ];
+    if ($cookieFile !== null) {
+        $opts[CURLOPT_COOKIEJAR] = $cookieFile;
+        $opts[CURLOPT_COOKIEFILE] = $cookieFile;
+    }
+    if ($postFields !== null) {
+        $opts[CURLOPT_POST] = true;
+        $opts[CURLOPT_POSTFIELDS] = http_build_query($postFields);
+    }
+    curl_setopt_array($ch, $opts);
+    $html = curl_exec($ch);
+    curl_close($ch);
+    return is_string($html) ? $html : '';
+}
+
+function rsm_collab_auth_session_login(): ?string
+{
+    $credentials = rsm_collab_auth_credentials();
+    if ($credentials === []) {
+        return null;
+    }
+    $cookieFile = tempnam(sys_get_temp_dir(), 'rsm_collab_');
+    if (!is_string($cookieFile) || $cookieFile === '') {
+        return null;
+    }
+    $url = rsm_collab_source_url('Closing Kampus Regional');
+    rsm_collab_curl_request($url, $cookieFile, [
+        'acc_username' => $credentials['username'],
+        'acc_password' => $credentials['password'],
+        'bsignin' => '',
+    ]);
+    rsm_collab_curl_request($url, $cookieFile, null);
+    return $cookieFile;
+}
+
+function rsm_collab_report_from_range(string $reportName, string $dayFrom, string $dayTo, ?string $cookieFile = null): array
 {
     $url = rsm_collab_source_url($reportName);
     if ($url === '') {
@@ -5021,14 +5071,37 @@ function rsm_collab_report_from_url(string $reportName): array
     }
 
     $isAuthenticated = in_array($reportName, ['Closing Kampus Regional', 'Herreg Kampus Regional', 'Closing Personal Per Regional', 'Rekapitulasi PMB Periode Prioritas P2K'], true);
-    $html = $isAuthenticated ? rsm_collab_authenticated_html($url) : rsm_collab_fetch_plain_html($url);
-    if (!$isAuthenticated && trim($html) === '') {
-        usleep(500000);
-        $html = rsm_collab_fetch_plain_html($url);
+    $postFields = ['filter_dayone' => $dayFrom, 'filter_daytwo' => $dayTo, 'bmonth' => 'View'];
+
+    if ($isAuthenticated) {
+        if ($cookieFile === null || !is_file($cookieFile)) {
+            return [];
+        }
+        $html = rsm_collab_curl_request($url, $cookieFile, $postFields);
+    } else {
+        $html = rsm_collab_curl_request($url, null, $postFields);
     }
+
     if (trim($html) === '') {
         return [];
     }
+
+    $tables = rsm_collab_parse_html_tables($html);
+    if ($tables === []) {
+        return [];
+    }
+
+    return [
+        'name' => $reportName,
+        'created_at' => rsm_wib_timestamp(),
+        'source_url' => $url,
+        'source_mode' => 'backfill_range',
+        'tables' => $tables,
+    ];
+}
+
+function rsm_collab_parse_html_tables(string $html): array
+{
     $html = preg_replace('/<br\s*\/?>/i', "\n", $html) ?? $html;
 
     $tables = [];
@@ -5131,6 +5204,27 @@ function rsm_collab_report_from_url(string $reportName): array
         }
     }
 
+    return $tables;
+}
+
+function rsm_collab_report_from_url(string $reportName): array
+{
+    $url = rsm_collab_source_url($reportName);
+    if ($url === '') {
+        return [];
+    }
+
+    $isAuthenticated = in_array($reportName, ['Closing Kampus Regional', 'Herreg Kampus Regional', 'Closing Personal Per Regional', 'Rekapitulasi PMB Periode Prioritas P2K'], true);
+    $html = $isAuthenticated ? rsm_collab_authenticated_html($url) : rsm_collab_fetch_plain_html($url);
+    if (!$isAuthenticated && trim($html) === '') {
+        usleep(500000);
+        $html = rsm_collab_fetch_plain_html($url);
+    }
+    if (trim($html) === '') {
+        return [];
+    }
+
+    $tables = rsm_collab_parse_html_tables($html);
     if ($tables === []) {
         return [];
     }

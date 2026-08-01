@@ -390,6 +390,35 @@ function rsm_ensure_schema(): void
     rsm_add_column_if_missing('rsm_activity_logs', 'actor_view_role', 'VARCHAR(40) NULL AFTER actor_actual_role');
     rsm_add_column_if_missing('rsm_activity_logs', 'impersonator_user_id', 'INT UNSIGNED NULL AFTER actor_name');
     rsm_add_column_if_missing('rsm_activity_logs', 'impersonator_name', 'VARCHAR(180) NULL AFTER impersonator_user_id');
+
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS rsm_collab_report_archive (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            report_name VARCHAR(80) NOT NULL,
+            report_month VARCHAR(7) NOT NULL,
+            payload LONGTEXT NOT NULL,
+            archived_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_rsm_collab_report_archive_scope (report_name, report_month)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS rsm_collab_daily_metrics (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            report_name VARCHAR(80) NOT NULL,
+            metric_date DATE NOT NULL,
+            entity_key VARCHAR(191) NOT NULL,
+            staff_nik VARCHAR(80) NULL,
+            staff_name VARCHAR(180) NULL,
+            regional VARCHAR(120) NULL,
+            campus_name VARCHAR(180) NULL,
+            value DECIMAL(12,2) NOT NULL DEFAULT 0,
+            synced_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_rsm_collab_daily_metrics (report_name, metric_date, entity_key),
+            INDEX idx_rsm_collab_daily_metrics_lookup (report_name, metric_date, regional)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
 }
 
 function rsm_seed_users(): void
@@ -4314,6 +4343,9 @@ function rsm_collab_source_url(string $reportName): string
         'Closing Collab' => 'https://cb.web.id/pencapaian_closing_collab_template.php',
         'Herreg Collab' => 'https://cb.web.id/pencapaian_herreg_collab_template.php',
         'Closing Kampus Regional' => 'https://cb.web.id/pencapaian_closing_perkampus_peregional.php',
+        'Herreg Kampus Regional' => 'https://cb.web.id/pencapaian_closing_herreg_perkampus_peregional.php',
+        'Closing Personal Per Regional' => 'https://cb.web.id/pencapaian_closing_personal_per_regional.php',
+        'Rekapitulasi PMB Periode Prioritas P2K' => 'https://cb.web.id/rekapitulasi_pencapaian_pmb_periode_prioritas.php?program=p2k',
     ][$reportName] ?? '';
 }
 
@@ -4555,6 +4587,151 @@ function rsm_collab_cache_write(array $payload): void
     file_put_contents($path, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), LOCK_EX);
 }
 
+function rsm_collab_archive_report(string $reportName, array $report): void
+{
+    $rows = $report['tables'][0] ?? [];
+    if (!is_array($rows) || count($rows) < 3) {
+        return;
+    }
+    $month = rsm_collab_report_month($rows);
+    if ($month === '') {
+        return;
+    }
+    $payload = json_encode($report, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if ($payload === false) {
+        return;
+    }
+    $stmt = rsm_pdo()->prepare(
+        'INSERT INTO rsm_collab_report_archive (report_name, report_month, payload)
+         VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE payload = VALUES(payload), updated_at = CURRENT_TIMESTAMP'
+    );
+    $stmt->execute([$reportName, $month, $payload]);
+}
+
+function rsm_collab_report_from_archive(string $reportName, string $month): array
+{
+    if ($month === '') {
+        return [];
+    }
+    $stmt = rsm_pdo()->prepare(
+        'SELECT payload FROM rsm_collab_report_archive WHERE report_name = ? AND report_month = ? LIMIT 1'
+    );
+    $stmt->execute([$reportName, $month]);
+    $payload = $stmt->fetchColumn();
+    if (!is_string($payload) || $payload === '') {
+        return [];
+    }
+    $decoded = json_decode($payload, true);
+    if (!is_array($decoded) || empty($decoded['tables'][0]) || !is_array($decoded['tables'][0])) {
+        return [];
+    }
+    $decoded['source_mode'] = 'archive';
+    return $decoded;
+}
+
+function rsm_collab_ingest_daily_metrics(string $reportName, array $report): void
+{
+    $rows = $report['tables'][0] ?? [];
+    if (!is_array($rows) || count($rows) < 3) {
+        return;
+    }
+    $reportMonth = rsm_collab_report_month($rows);
+    if ($reportMonth === '') {
+        return;
+    }
+    $layout = rsm_collab_layout($rows);
+    $dateHeaderRow = $layout['date_row_index'] !== null ? ($rows[$layout['date_row_index']] ?? []) : [];
+    if (!is_array($dateHeaderRow) || $dateHeaderRow === []) {
+        return;
+    }
+
+    $isCampus = in_array($reportName, ['Closing Kampus Regional', 'Herreg Kampus Regional'], true);
+    $valueBase = $isCampus ? 4 : 5;
+
+    $dayValueIndexes = [];
+    $offset = 0;
+    foreach ($layout['day_indexes'] as $headerIndex) {
+        $dayLabel = trim((string) ($dateHeaderRow[$headerIndex] ?? ''));
+        if (!preg_match('/^\d{1,2}$/', $dayLabel)) {
+            continue;
+        }
+        $dayValueIndexes[(int) $dayLabel] = $valueBase + $offset;
+        $offset++;
+    }
+    if ($dayValueIndexes === []) {
+        return;
+    }
+
+    $pdo = rsm_pdo();
+    $stmt = $pdo->prepare(
+        'INSERT INTO rsm_collab_daily_metrics
+            (report_name, metric_date, entity_key, staff_nik, staff_name, regional, campus_name, value)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+            value = VALUES(value), staff_nik = VALUES(staff_nik), staff_name = VALUES(staff_name),
+            regional = VALUES(regional), campus_name = VALUES(campus_name), synced_at = CURRENT_TIMESTAMP'
+    );
+
+    $pdo->beginTransaction();
+    try {
+        foreach ($rows as $index => $row) {
+            if ($index < (int) ($layout['data_start_index'] ?? 0) || !is_array($row)) {
+                continue;
+            }
+
+            if ($isCampus) {
+                if (count($row) < 5) {
+                    continue;
+                }
+                $regionalLabel = trim((string) ($row[2] ?? ''));
+                $campusName = trim((string) ($row[3] ?? ''));
+                if ($campusName === '' || !preg_match('/Regional\s+([1-7])/i', $regionalLabel, $match)) {
+                    continue;
+                }
+                $regional = 'Regional ' . $match[1];
+                $entityKey = mb_strtolower($regional . '|' . $campusName);
+                $staffNik = null;
+                $staffName = null;
+            } else {
+                $regionalDigit = trim((string) ($row[(int) $layout['regional_index']] ?? ''));
+                $staffNik = trim((string) ($row[(int) $layout['staff_nik_index']] ?? ''));
+                $staffName = trim((string) ($row[(int) $layout['staff_name_index']] ?? ''));
+                if (!preg_match('/^SG[.\d-]+$/i', $staffNik) && preg_match('/^SG[.\d-]+$/i', trim((string) ($row[(int) $layout['staff_nik_index'] + 1] ?? '')))) {
+                    $staffNik = trim((string) ($row[(int) $layout['staff_nik_index'] + 1] ?? ''));
+                    $staffName = trim((string) ($row[(int) $layout['staff_name_index'] + 1] ?? $staffName));
+                }
+                if ($staffName === '' || !preg_match('/^[1-7]$/', $regionalDigit)) {
+                    continue;
+                }
+                $regional = 'Regional ' . $regionalDigit;
+                $entityKey = rsm_username_from_nik_or_name($staffNik !== '' ? $staffNik : null, $staffName);
+                $campusName = null;
+            }
+
+            foreach ($dayValueIndexes as $dayNumber => $valueIndex) {
+                $value = rsm_number_value($row[$valueIndex] ?? 0);
+                $metricDate = $reportMonth . '-' . str_pad((string) $dayNumber, 2, '0', STR_PAD_LEFT);
+                $stmt->execute([$reportName, $metricDate, $entityKey, $staffNik, $staffName, $regional, $campusName, $value]);
+            }
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        throw $e;
+    }
+}
+
+function rsm_collab_daily_metrics_synced_at(string $reportName, string $dateFrom, string $dateTo): string
+{
+    $stmt = rsm_pdo()->prepare(
+        'SELECT MAX(synced_at) FROM rsm_collab_daily_metrics WHERE report_name = ? AND metric_date BETWEEN ? AND ?'
+    );
+    $stmt->execute([$reportName, $dateFrom, $dateTo]);
+    $value = $stmt->fetchColumn();
+    return is_string($value) ? $value : '';
+}
+
 function rsm_collab_report_from_cache(string $reportName): array
 {
     $cache = rsm_collab_cache_read();
@@ -4576,7 +4753,7 @@ function rsm_collab_sync_cache(): array
         'reports' => [],
         'errors' => [],
     ];
-    foreach (['Closing Collab', 'Herreg Collab', 'Closing Kampus Regional'] as $reportName) {
+    foreach (['Closing Collab', 'Herreg Collab', 'Closing Kampus Regional', 'Herreg Kampus Regional', 'Closing Personal Per Regional', 'Rekapitulasi PMB Periode Prioritas P2K'] as $reportName) {
         $report = rsm_collab_report_from_url($reportName);
         if ($report === []) {
             $result['errors'][$reportName] = 'Source tidak terbaca saat sinkronisasi.';
@@ -4585,6 +4762,10 @@ function rsm_collab_sync_cache(): array
         $report['source_mode'] = 'cache_auto';
         $report['cached_at'] = $result['synced_at'];
         $result['reports'][$reportName] = $report;
+        rsm_collab_archive_report($reportName, $report);
+        if (in_array($reportName, ['Closing Collab', 'Herreg Collab', 'Closing Kampus Regional', 'Herreg Kampus Regional'], true)) {
+            rsm_collab_ingest_daily_metrics($reportName, $report);
+        }
     }
 
     if ($result['reports'] === []) {
@@ -4711,6 +4892,7 @@ function rsm_collab_authenticated_html(string $url): string
                 CURLOPT_HTTPHEADER => ['Accept: text/html,application/xhtml+xml'],
             ]);
             $loginHtml = curl_exec($login);
+            curl_setopt($login, CURLOPT_COOKIELIST, 'FLUSH');
             curl_close($login);
 
             $read = curl_init($url);
@@ -4774,7 +4956,7 @@ function rsm_collab_report_from_url(string $reportName): array
         return [];
     }
 
-    if ($reportName === 'Closing Kampus Regional') {
+    if (in_array($reportName, ['Closing Kampus Regional', 'Herreg Kampus Regional', 'Closing Personal Per Regional', 'Rekapitulasi PMB Periode Prioritas P2K'], true)) {
         $html = rsm_collab_authenticated_html($url);
     } else {
         $context = stream_context_create([
@@ -4871,11 +5053,26 @@ function rsm_collab_report_from_url(string $reportName): array
     ];
 }
 
-function rsm_collab_report(string $reportName): array
+function rsm_collab_report(string $reportName, string $month = ''): array
 {
     $cache = rsm_collab_report_from_cache($reportName);
     if ($cache !== []) {
+        $cacheMonth = rsm_collab_report_month($cache['tables'][0] ?? []);
+        if ($month === '' || $cacheMonth === $month) {
+            return $cache;
+        }
+        $archived = rsm_collab_report_from_archive($reportName, $month);
+        if ($archived !== []) {
+            return $archived;
+        }
         return $cache;
+    }
+
+    if ($month !== '') {
+        $archived = rsm_collab_report_from_archive($reportName, $month);
+        if ($archived !== []) {
+            return $archived;
+        }
     }
 
     $history = rsm_collab_report_from_history($reportName);
@@ -4925,10 +5122,27 @@ function rsm_collab_layout(array $rows): array
                 $monthRowIndex = (int) $rowIndex;
             }
         }
-        [$dayIndexes, $totalIndex] = rsm_collab_day_indexes($row);
-        if ($dayIndexes !== [] && count($dayIndexes) >= 3) {
-            $dateRowIndex = (int) $rowIndex;
-            break;
+    }
+
+    if ($monthRowIndex !== null) {
+        $candidateRow = $rows[$monthRowIndex + 1] ?? null;
+        if (is_array($candidateRow)) {
+            [$candidateDayIndexes] = rsm_collab_day_indexes($candidateRow);
+            if ($candidateDayIndexes !== []) {
+                $dateRowIndex = $monthRowIndex + 1;
+            }
+        }
+    }
+    if ($dateRowIndex === null) {
+        foreach ($rows as $rowIndex => $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            [$dayIndexes] = rsm_collab_day_indexes($row);
+            if ($dayIndexes !== [] && count($dayIndexes) >= 3) {
+                $dateRowIndex = (int) $rowIndex;
+                break;
+            }
         }
     }
 
@@ -4977,77 +5191,19 @@ function rsm_collab_report_month(array $rows): string
 
 function rsm_collab_staff_totals(string $reportName, array $filters, string $area = 'Regional', ?array $user = null): array
 {
-    $report = rsm_collab_report($reportName);
-    $rows = $report['tables'][0] ?? [];
-    if (!is_array($rows) || count($rows) < 3) {
+    $dateFrom = (string) ($filters['date_from'] ?? '');
+    $dateTo = (string) ($filters['date_to'] ?? '');
+    if ($dateFrom === '' || $dateTo === '') {
         return [
             '__meta' => [
                 'source_url' => rsm_collab_source_url($reportName),
-                'source_mode' => 'unreadable',
+                'source_mode' => 'no_range',
                 'report_month' => '',
                 'source_time' => '',
             ],
         ];
     }
-    $reportMonth = rsm_collab_report_month($rows);
-    if ($reportMonth !== '' && ($filters['month'] ?? '') !== '' && $reportMonth !== (string) $filters['month']) {
-        return [
-            '__meta' => [
-                'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
-                'source_mode' => (string) ($report['source_mode'] ?? 'unknown') . '_month_mismatch',
-                'report_month' => $reportMonth,
-                'source_time' => (string) ($report['created_at'] ?? ''),
-            ],
-        ];
-    }
 
-    $layout = rsm_collab_layout($rows);
-    $dayIndexes = $layout['day_indexes'];
-    $totalIndex = $layout['total_index'];
-
-    if ($totalIndex === null) {
-        return [
-            '__meta' => [
-                'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
-                'source_mode' => (string) ($report['source_mode'] ?? 'unknown') . '_no_total',
-                'report_month' => $reportMonth,
-                'source_time' => (string) ($report['created_at'] ?? ''),
-            ],
-        ];
-    }
-
-    $dateHeaderRow = $layout['date_row_index'] !== null ? ($rows[$layout['date_row_index']] ?? []) : [];
-    $dayValueIndexes = [];
-    $dayOffset = 0;
-    foreach ($dayIndexes as $headerIndex) {
-        $dayLabel = trim((string) ($dateHeaderRow[$headerIndex] ?? ''));
-        if (!preg_match('/^\d{1,2}$/', $dayLabel)) {
-            continue;
-        }
-        $dayValueIndexes[(int) $dayLabel] = 5 + $dayOffset;
-        $dayOffset++;
-    }
-    if ($dayValueIndexes !== []) {
-        $totalIndex = 5 + count($dayValueIndexes);
-    }
-
-    $valueIndexes = [];
-    $fromTimestamp = !empty($filters['date_from']) ? strtotime((string) $filters['date_from']) : false;
-    $toTimestamp = !empty($filters['date_to']) ? strtotime((string) $filters['date_to']) : false;
-    if ($fromTimestamp !== false && $toTimestamp !== false && $reportMonth !== '') {
-        if ($fromTimestamp > $toTimestamp) {
-            [$fromTimestamp, $toTimestamp] = [$toTimestamp, $fromTimestamp];
-        }
-        foreach ($dayValueIndexes as $dayNumber => $valueIndex) {
-            $columnTimestamp = strtotime($reportMonth . '-' . str_pad((string) $dayNumber, 2, '0', STR_PAD_LEFT));
-            if ($columnTimestamp !== false && $columnTimestamp >= $fromTimestamp && $columnTimestamp <= $toTimestamp) {
-                $valueIndexes[] = (int) $valueIndex;
-            }
-        }
-    }
-    if ($valueIndexes === []) {
-        $valueIndexes = [(int) $totalIndex];
-    }
     $allowedRegionals = rsm_area_regionals($area);
     $filterRegional = (string) ($filters['wilayah'] ?? '');
     $filterStaff = (string) ($filters['staff_name'] ?? '');
@@ -5066,56 +5222,46 @@ function rsm_collab_staff_totals(string $reportName, array $filters, string $are
         }
     }
 
+    $where = ['report_name = ?', 'metric_date BETWEEN ? AND ?'];
+    $params = [$reportName, $dateFrom, $dateTo];
+    if ($allowedRegionals !== []) {
+        $where[] = 'regional IN (' . implode(',', array_fill(0, count($allowedRegionals), '?')) . ')';
+        array_push($params, ...$allowedRegionals);
+    }
+    if ($filterStaff !== '') {
+        $where[] = 'staff_name = ?';
+        $params[] = $filterStaff;
+    }
+
+    $stmt = rsm_pdo()->prepare(
+        'SELECT entity_key, MAX(staff_nik) AS staff_nik, MAX(staff_name) AS staff_name, MAX(regional) AS regional, SUM(value) AS total_value
+         FROM rsm_collab_daily_metrics
+         WHERE ' . implode(' AND ', $where) . '
+         GROUP BY entity_key'
+    );
+    $stmt->execute($params);
+    $dbRows = $stmt->fetchAll();
+    $syncedAt = rsm_collab_daily_metrics_synced_at($reportName, $dateFrom, $dateTo);
+
     $totals = [];
-    foreach ($rows as $index => $row) {
-        if ($index < (int) $layout['data_start_index'] || !is_array($row)) {
-            continue;
-        }
-
-        $regional = trim((string) ($row[(int) $layout['regional_index']] ?? ''));
-        $staffNik = trim((string) ($row[(int) $layout['staff_nik_index']] ?? ''));
-        $staffName = trim((string) ($row[(int) $layout['staff_name_index']] ?? ''));
-        if (!preg_match('/^SG[.\d-]+$/i', $staffNik) && preg_match('/^SG[.\d-]+$/i', trim((string) ($row[(int) $layout['staff_nik_index'] + 1] ?? '')))) {
-            $staffNik = trim((string) ($row[(int) $layout['staff_nik_index'] + 1] ?? ''));
-            $staffName = trim((string) ($row[(int) $layout['staff_name_index'] + 1] ?? $staffName));
-        }
-        if ($staffName === '' || !preg_match('/^[1-7]$/', $regional)) {
-            continue;
-        }
-        if ($allowedRegionals !== [] && !in_array('Regional ' . $regional, $allowedRegionals, true)) {
-            continue;
-        }
-        if ($filterStaff !== '' && strcasecmp($staffName, $filterStaff) !== 0) {
-            continue;
-        }
-
-        $value = 0.0;
-        foreach ($valueIndexes as $valueIndex) {
-            $value += rsm_number_value($row[$valueIndex] ?? 0);
-        }
-        $keys = [rsm_username_from_nik_or_name($staffNik !== '' ? $staffNik : null, $staffName)];
-        foreach ($keys as $key) {
-            if (!isset($totals[$key])) {
-                $totals[$key] = [
-                    'nik' => $staffNik,
-                    'name' => $staffName,
-                    'regional' => 'Regional ' . $regional,
-                    'value' => 0.0,
-                    'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
-                    'source_mode' => (string) ($report['source_mode'] ?? 'unknown'),
-                    'report_month' => $reportMonth,
-                    'source_time' => (string) ($report['created_at'] ?? ''),
-                ];
-            }
-            $totals[$key]['value'] += $value;
-        }
+    foreach ($dbRows as $row) {
+        $totals[(string) $row['entity_key']] = [
+            'nik' => (string) ($row['staff_nik'] ?? ''),
+            'name' => (string) ($row['staff_name'] ?? ''),
+            'regional' => (string) ($row['regional'] ?? ''),
+            'value' => (float) $row['total_value'],
+            'source_url' => rsm_collab_source_url($reportName),
+            'source_mode' => 'daily_metrics',
+            'report_month' => substr($dateFrom, 0, 7),
+            'source_time' => $syncedAt,
+        ];
     }
 
     $totals['__meta'] = [
-        'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
-        'source_mode' => (string) ($report['source_mode'] ?? 'unknown'),
-        'report_month' => $reportMonth,
-        'source_time' => (string) ($report['created_at'] ?? ''),
+        'source_url' => rsm_collab_source_url($reportName),
+        'source_mode' => $totals === [] ? 'daily_metrics_empty' : 'daily_metrics',
+        'report_month' => substr($dateFrom, 0, 7),
+        'source_time' => $syncedAt,
     ];
     return $totals;
 }
@@ -5200,63 +5346,17 @@ function rsm_collab_staff_performance(string $area, array $filters, ?array $user
 function rsm_collab_campus_totals(array $filters, string $area = 'Regional', ?array $user = null): array
 {
     $reportName = 'Closing Kampus Regional';
-    $report = rsm_collab_report($reportName);
-    $rows = $report['tables'][0] ?? [];
-    if (!is_array($rows) || count($rows) < 3) {
+    $dateFrom = (string) ($filters['date_from'] ?? '');
+    $dateTo = (string) ($filters['date_to'] ?? '');
+    if ($dateFrom === '' || $dateTo === '') {
         return [
             '__meta' => [
                 'source_url' => rsm_collab_source_url($reportName),
-                'source_mode' => 'unreadable',
+                'source_mode' => 'no_range',
                 'report_month' => '',
                 'source_time' => '',
             ],
         ];
-    }
-
-    $layout = rsm_collab_layout($rows);
-    $reportMonth = rsm_collab_report_month($rows);
-    $dateRowIndex = $layout['date_row_index'];
-    $dateHeaderRow = $dateRowIndex !== null ? ($rows[$dateRowIndex] ?? []) : [];
-    [$dayIndexes, $totalIndex] = is_array($dateHeaderRow) ? rsm_collab_day_indexes($dateHeaderRow) : [[], null];
-    if ($dayIndexes === []) {
-        return [
-            '__meta' => [
-                'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
-                'source_mode' => (string) ($report['source_mode'] ?? 'unknown') . '_no_days',
-                'report_month' => $reportMonth,
-                'source_time' => (string) ($report['created_at'] ?? ''),
-            ],
-        ];
-    }
-
-    $dayValueIndexes = [];
-    foreach (array_values($dayIndexes) as $offset => $headerIndex) {
-        $dayLabel = trim((string) ($dateHeaderRow[$headerIndex] ?? ''));
-        if (preg_match('/^\d{1,2}$/', $dayLabel)) {
-            $dayValueIndexes[(int) $dayLabel] = 4 + (int) $offset;
-        }
-    }
-    $totalValueIndex = 4 + count($dayValueIndexes);
-    if ($totalIndex !== null && $totalIndex >= $totalValueIndex) {
-        $totalValueIndex = (int) $totalIndex;
-    }
-
-    $valueIndexes = [];
-    $fromTimestamp = !empty($filters['date_from']) ? strtotime((string) $filters['date_from']) : false;
-    $toTimestamp = !empty($filters['date_to']) ? strtotime((string) $filters['date_to']) : false;
-    if ($fromTimestamp !== false && $toTimestamp !== false && $reportMonth !== '') {
-        if ($fromTimestamp > $toTimestamp) {
-            [$fromTimestamp, $toTimestamp] = [$toTimestamp, $fromTimestamp];
-        }
-        foreach ($dayValueIndexes as $dayNumber => $valueIndex) {
-            $columnTimestamp = strtotime($reportMonth . '-' . str_pad((string) $dayNumber, 2, '0', STR_PAD_LEFT));
-            if ($columnTimestamp !== false && $columnTimestamp >= $fromTimestamp && $columnTimestamp <= $toTimestamp) {
-                $valueIndexes[] = (int) $valueIndex;
-            }
-        }
-    }
-    if ($valueIndexes === []) {
-        $valueIndexes = [(int) $totalValueIndex];
     }
 
     $allowedRegionals = rsm_area_regionals($area);
@@ -5272,51 +5372,45 @@ function rsm_collab_campus_totals(array $filters, string $area = 'Regional', ?ar
         $allowedRegionals = [(string) $user['regional']];
     }
 
+    $where = ['report_name = ?', 'metric_date BETWEEN ? AND ?'];
+    $params = [$reportName, $dateFrom, $dateTo];
+    if ($allowedRegionals !== []) {
+        $where[] = 'regional IN (' . implode(',', array_fill(0, count($allowedRegionals), '?')) . ')';
+        array_push($params, ...$allowedRegionals);
+    }
+    if ($filterUnit !== '') {
+        $where[] = 'campus_name = ?';
+        $params[] = $filterUnit;
+    }
+
+    $stmt = rsm_pdo()->prepare(
+        'SELECT entity_key, MAX(regional) AS regional, MAX(campus_name) AS campus_name, SUM(value) AS total_value
+         FROM rsm_collab_daily_metrics
+         WHERE ' . implode(' AND ', $where) . '
+         GROUP BY entity_key'
+    );
+    $stmt->execute($params);
+    $dbRows = $stmt->fetchAll();
+    $syncedAt = rsm_collab_daily_metrics_synced_at($reportName, $dateFrom, $dateTo);
+
     $totals = [];
-    foreach ($rows as $index => $row) {
-        if ($index < (int) ($layout['data_start_index'] ?? 0) || !is_array($row) || count($row) < 5) {
-            continue;
-        }
-
-        $regionalLabel = trim((string) ($row[2] ?? ''));
-        $campusName = trim((string) ($row[3] ?? ''));
-        if ($campusName === '' || !preg_match('/Regional\s+([1-7])/i', $regionalLabel, $match)) {
-            continue;
-        }
-
-        $regional = 'Regional ' . $match[1];
-        if ($allowedRegionals !== [] && !in_array($regional, $allowedRegionals, true)) {
-            continue;
-        }
-        if ($filterUnit !== '' && strcasecmp($campusName, $filterUnit) !== 0) {
-            continue;
-        }
-
-        $value = 0.0;
-        foreach ($valueIndexes as $valueIndex) {
-            $value += rsm_number_value($row[$valueIndex] ?? 0);
-        }
-
-        $key = mb_strtolower($regional . '|' . $campusName);
-        if (!isset($totals[$key])) {
-            $totals[$key] = [
-                'regional' => $regional,
-                'unit' => $campusName,
-                'registrasi' => 0.0,
-                'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
-                'source_mode' => (string) ($report['source_mode'] ?? 'unknown'),
-                'report_month' => $reportMonth,
-                'source_time' => (string) ($report['created_at'] ?? ''),
-            ];
-        }
-        $totals[$key]['registrasi'] += $value;
+    foreach ($dbRows as $row) {
+        $totals[(string) $row['entity_key']] = [
+            'regional' => (string) ($row['regional'] ?? ''),
+            'unit' => (string) ($row['campus_name'] ?? ''),
+            'registrasi' => (float) $row['total_value'],
+            'source_url' => rsm_collab_source_url($reportName),
+            'source_mode' => 'daily_metrics',
+            'report_month' => substr($dateFrom, 0, 7),
+            'source_time' => $syncedAt,
+        ];
     }
 
     $totals['__meta'] = [
-        'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
-        'source_mode' => (string) ($report['source_mode'] ?? 'unknown'),
-        'report_month' => $reportMonth,
-        'source_time' => (string) ($report['created_at'] ?? ''),
+        'source_url' => rsm_collab_source_url($reportName),
+        'source_mode' => $totals === [] ? 'daily_metrics_empty' : 'daily_metrics',
+        'report_month' => substr($dateFrom, 0, 7),
+        'source_time' => $syncedAt,
     ];
     return $totals;
 }

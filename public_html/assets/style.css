@@ -2077,6 +2077,28 @@ tr.group-subheading span {
   background: #eff6ff;
 }
 
+.filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.filter-tabs a {
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--blue);
+  background: #eff6ff;
+  text-decoration: none;
+}
+
+.filter-tabs a.active {
+  color: #fff;
+  background: var(--blue);
+}
+
 .inline-action {
   display: inline-flex;
   align-items: center;

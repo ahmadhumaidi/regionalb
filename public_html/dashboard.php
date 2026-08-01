@@ -40,6 +40,7 @@ $menus = [
 $adminMenus = [
     'targets' => 'Target Bulanan',
     'users' => 'Kelola User',
+    'sumber-collab' => 'Sumber Data Collab',
 ];
 $pageTitles = $menus + $adminMenus + ['profile' => 'Profil Saya', 'detail' => 'Detail Laporan', 'edit' => 'Edit Laporan'];
 $pageTitles['closing-kampus'] = 'Top 5 Pencapaian Kampus';
@@ -194,6 +195,7 @@ $monthlyTargets = [];
 $dashboardTarget = null;
 $achievementRegionalTargets = [];
 $syncHealth = [];
+$collabSourceSnapshot = ['synced_at' => '', 'reports' => []];
 $rekapType = in_array((string) ($_GET['rekap_type'] ?? 'all'), ['all', 'marketing', 'ads', 'other', 'staff', 'wilayah', 'unit'], true) ? (string) ($_GET['rekap_type'] ?? 'all') : 'all';
 $hasManualRekapDate = isset($_GET['date_from']) || isset($_GET['date_to']);
 if ($page === 'rekap' && $rekapType === 'staff' && !$hasManualRekapDate) {
@@ -244,6 +246,9 @@ try {
         $page = 'dashboard';
     }
     if ($page === 'targets' && !in_array((string) ($authUser['role'] ?? ''), ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
+        $page = 'dashboard';
+    }
+    if ($page === 'sumber-collab' && !in_array((string) ($authUser['role'] ?? ''), ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
         $page = 'dashboard';
     }
     if ($page === 'campuses') {
@@ -346,6 +351,9 @@ try {
         $syncHealth = rsm_sync_health_status();
     } elseif ($page === 'bdc-users') {
         $bdcReportUsers = rsm_bdc_report_users();
+        $syncHealth = rsm_sync_health_status();
+    } elseif ($page === 'sumber-collab') {
+        $collabSourceSnapshot = rsm_collab_cache_snapshot();
         $syncHealth = rsm_sync_health_status();
     } elseif ($page === 'jadwal-koordinator') {
         $coordinatorScheduleFilters = rsm_coordinator_schedule_filters();
@@ -543,6 +551,9 @@ if ($page === 'rekap' && $dbError === null) {
                 continue;
             }
             if ($key === 'targets' && !in_array($actualNavRole, ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
+                continue;
+            }
+            if ($key === 'sumber-collab' && !in_array($actualNavRole, ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
                 continue;
             }
           ?>
@@ -923,6 +934,52 @@ if ($page === 'rekap' && $dbError === null) {
                     <td><?= h(number_format((float) ($row['belum_herreg'] ?? 0), 0, ',', '.')) ?></td>
                     <td><strong><?= h(number_format((float) ($row['herreg'] ?? 0), 0, ',', '.')) ?></strong></td>
                     <td><?= h(number_format((float) ($row['fu_hari_ini'] ?? 0), 0, ',', '.')) ?></td>
+                  </tr>
+                <?php endforeach; ?>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      <?php elseif ($page === 'sumber-collab'): ?>
+        <?php
+          $collabReports = (array) ($collabSourceSnapshot['reports'] ?? []);
+          $collabReportNames = array_keys($collabReports);
+          $activeCollabReport = (string) ($_GET['report'] ?? '');
+          if (!in_array($activeCollabReport, $collabReportNames, true)) {
+              $activeCollabReport = $collabReportNames[0] ?? '';
+          }
+          $activeReportData = $collabReports[$activeCollabReport] ?? ['rows' => [], 'row_count' => 0, 'column_count' => 0, 'source_url' => '', 'source_mode' => '', 'cached_at' => '', 'created_at' => '', 'error' => ''];
+        ?>
+        <?php render_sync_health_panel($syncHealth); ?>
+        <section class="panel">
+          <div class="panel-head">
+            <div><h2>Sumber Data Collab (cb.web.id)</h2><span>Snapshot cache terakhir tersinkron<?= !empty($collabSourceSnapshot['synced_at']) ? ' - ' . h((string) $collabSourceSnapshot['synced_at']) . ' WIB' : ' - belum ada sinkronisasi' ?></span></div>
+          </div>
+          <div class="filter-tabs">
+            <?php foreach ($collabReportNames as $reportName): ?>
+              <a class="<?= $reportName === $activeCollabReport ? 'active' : '' ?>" href="?page=sumber-collab&report=<?= rawurlencode($reportName) ?><?= h($roleQuery) ?>"><?= h($reportName) ?></a>
+            <?php endforeach; ?>
+          </div>
+          <?php if ((string) ($activeReportData['error'] ?? '') !== ''): ?>
+            <div class="alert alert-danger"><?= h((string) $activeReportData['error']) ?></div>
+          <?php endif; ?>
+          <p>
+            <strong>URL sumber:</strong> <?= h((string) ($activeReportData['source_url'] ?? '')) ?><br>
+            <strong>Mode:</strong> <?= h((string) (($activeReportData['source_mode'] ?? '') ?: '-')) ?>
+            - <strong>Diambil:</strong> <?= h((string) (($activeReportData['created_at'] ?? '') ?: '-')) ?>
+            - <strong>Cache disimpan:</strong> <?= h((string) (($activeReportData['cached_at'] ?? '') ?: '-')) ?>
+            - <strong><?= h(number_format((int) ($activeReportData['row_count'] ?? 0), 0, ',', '.')) ?></strong> baris x
+            <strong><?= h(number_format((int) ($activeReportData['column_count'] ?? 0), 0, ',', '.')) ?></strong> kolom
+          </p>
+          <div class="table-wrap">
+            <table>
+              <tbody>
+                <?php if (empty($activeReportData['rows'])): ?><tr><td class="empty-row">Belum ada data tersinkron untuk sumber ini.</td></tr><?php endif; ?>
+                <?php foreach ((array) $activeReportData['rows'] as $rowIndex => $row): ?>
+                  <tr>
+                    <?php foreach ((array) $row as $cell): ?>
+                      <td><?= h((string) $cell) ?></td>
+                    <?php endforeach; ?>
                   </tr>
                 <?php endforeach; ?>
               </tbody>

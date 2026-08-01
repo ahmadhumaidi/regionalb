@@ -4349,6 +4349,17 @@ function rsm_collab_source_url(string $reportName): string
     ][$reportName] ?? '';
 }
 
+function rsm_collab_known_reports(): array
+{
+    return [
+        'Closing Collab',
+        'Herreg Collab',
+        'Closing Kampus Regional',
+        'Herreg Kampus Regional',
+        'Closing Personal Per Regional',
+        'Rekapitulasi PMB Periode Prioritas P2K',
+    ];
+}
 
 function rsm_collab_cache_path(): string
 {
@@ -4577,6 +4588,42 @@ function rsm_collab_cache_read(): array
     return is_array($decoded) ? $decoded : [];
 }
 
+function rsm_collab_cache_snapshot(): array
+{
+    $cache = rsm_collab_cache_read();
+    $reports = (array) ($cache['reports'] ?? []);
+    $errors = (array) ($cache['errors'] ?? []);
+
+    $snapshot = [];
+    foreach (rsm_collab_known_reports() as $reportName) {
+        $report = (array) ($reports[$reportName] ?? []);
+        $rows = $report['tables'][0] ?? [];
+        $rows = is_array($rows) ? $rows : [];
+        $columnCount = 0;
+        foreach ($rows as $row) {
+            if (is_array($row)) {
+                $columnCount = max($columnCount, count($row));
+            }
+        }
+        $snapshot[$reportName] = [
+            'name' => $reportName,
+            'source_url' => (string) ($report['source_url'] ?? rsm_collab_source_url($reportName)),
+            'source_mode' => (string) ($report['source_mode'] ?? ''),
+            'cached_at' => (string) ($report['cached_at'] ?? ''),
+            'created_at' => (string) ($report['created_at'] ?? ''),
+            'error' => (string) ($errors[$reportName] ?? ''),
+            'rows' => $rows,
+            'row_count' => count($rows),
+            'column_count' => $columnCount,
+        ];
+    }
+
+    return [
+        'synced_at' => (string) ($cache['synced_at'] ?? ''),
+        'reports' => $snapshot,
+    ];
+}
+
 function rsm_collab_cache_write(array $payload): void
 {
     $path = rsm_collab_cache_path();
@@ -4753,7 +4800,7 @@ function rsm_collab_sync_cache(): array
         'reports' => [],
         'errors' => [],
     ];
-    foreach (['Closing Collab', 'Herreg Collab', 'Closing Kampus Regional', 'Herreg Kampus Regional', 'Closing Personal Per Regional', 'Rekapitulasi PMB Periode Prioritas P2K'] as $reportName) {
+    foreach (rsm_collab_known_reports() as $reportName) {
         $report = rsm_collab_report_from_url($reportName);
         if ($report === []) {
             $result['errors'][$reportName] = 'Source tidak terbaca saat sinkronisasi.';
@@ -4949,6 +4996,23 @@ function rsm_collab_authenticated_html(string $url): string
     return is_string($html) ? $html : '';
 }
 
+function rsm_collab_fetch_plain_html(string $url): string
+{
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'timeout' => 20,
+            'header' => "User-Agent: RegionalB-Dashboard/1.0\r\nAccept: text/html,application/xhtml+xml\r\n",
+        ],
+        'ssl' => [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+        ],
+    ]);
+    $html = @file_get_contents($url, false, $context);
+    return is_string($html) ? $html : '';
+}
+
 function rsm_collab_report_from_url(string $reportName): array
 {
     $url = rsm_collab_source_url($reportName);
@@ -4956,23 +5020,13 @@ function rsm_collab_report_from_url(string $reportName): array
         return [];
     }
 
-    if (in_array($reportName, ['Closing Kampus Regional', 'Herreg Kampus Regional', 'Closing Personal Per Regional', 'Rekapitulasi PMB Periode Prioritas P2K'], true)) {
-        $html = rsm_collab_authenticated_html($url);
-    } else {
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'GET',
-                'timeout' => 8,
-                'header' => "User-Agent: RegionalB-Dashboard/1.0\r\nAccept: text/html,application/xhtml+xml\r\n",
-            ],
-            'ssl' => [
-                'verify_peer' => true,
-                'verify_peer_name' => true,
-            ],
-        ]);
-        $html = @file_get_contents($url, false, $context);
+    $isAuthenticated = in_array($reportName, ['Closing Kampus Regional', 'Herreg Kampus Regional', 'Closing Personal Per Regional', 'Rekapitulasi PMB Periode Prioritas P2K'], true);
+    $html = $isAuthenticated ? rsm_collab_authenticated_html($url) : rsm_collab_fetch_plain_html($url);
+    if (!$isAuthenticated && trim($html) === '') {
+        usleep(500000);
+        $html = rsm_collab_fetch_plain_html($url);
     }
-    if (!is_string($html) || trim($html) === '') {
+    if (trim($html) === '') {
         return [];
     }
     $html = preg_replace('/<br\s*\/?>/i', "\n", $html) ?? $html;

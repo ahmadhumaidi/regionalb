@@ -5041,14 +5041,51 @@ function rsm_collab_report_from_url(string $reportName): array
         if ($loaded) {
             foreach ($dom->getElementsByTagName('table') as $table) {
                 $rows = [];
+                $rowSpans = [];
                 foreach ($table->getElementsByTagName('tr') as $tr) {
+                    $tds = [];
+                    foreach ($tr->childNodes as $node) {
+                        if (in_array(strtolower((string) $node->nodeName), ['td', 'th'], true)) {
+                            $tds[] = $node;
+                        }
+                    }
+
+                    if (count($tds) === 1 && (int) $tds[0]->getAttribute('colspan') > 1) {
+                        continue;
+                    }
+
                     $cells = [];
-                    foreach ($tr->childNodes as $cell) {
-                        if (!in_array(strtolower((string) $cell->nodeName), ['td', 'th'], true)) {
+                    $col = 0;
+                    $tdIndex = 0;
+                    while ($tdIndex < count($tds) || isset($rowSpans[$col])) {
+                        if (isset($rowSpans[$col]) && $rowSpans[$col]['remaining'] > 0) {
+                            $cells[$col] = $rowSpans[$col]['value'];
+                            $rowSpans[$col]['remaining']--;
+                            if ($rowSpans[$col]['remaining'] <= 0) {
+                                unset($rowSpans[$col]);
+                            }
+                            $col++;
                             continue;
                         }
-                        $cells[] = trim(preg_replace('/\s+/', ' ', (string) $cell->textContent) ?? '');
+                        if ($tdIndex >= count($tds)) {
+                            break;
+                        }
+                        $node = $tds[$tdIndex];
+                        $tdIndex++;
+                        $text = trim(preg_replace('/\s+/', ' ', (string) $node->textContent) ?? '');
+                        $colspan = max(1, (int) $node->getAttribute('colspan') ?: 1);
+                        $rowspan = max(1, (int) $node->getAttribute('rowspan') ?: 1);
+                        for ($i = 0; $i < $colspan; $i++) {
+                            $cells[$col] = $text;
+                            if ($rowspan > 1) {
+                                $rowSpans[$col] = ['value' => $text, 'remaining' => $rowspan - 1];
+                            }
+                            $col++;
+                        }
                     }
+
+                    ksort($cells);
+                    $cells = array_values($cells);
                     if ($cells !== []) {
                         $rows[] = $cells;
                     }

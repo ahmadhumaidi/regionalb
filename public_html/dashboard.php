@@ -12,6 +12,9 @@ $allowedRoleKeys = ['staff'];
 $roleQuery = '';
 
 $roles = [
+    'super_user' => ['label' => 'Super User', 'name' => 'Super User', 'scope' => 'Akses penuh sistem, seluruh area, dan seluruh user'],
+    'executive_director' => ['label' => 'Executive Director', 'name' => 'Executive Director', 'scope' => 'Akses eksekutif seluruh wilayah, unit, dan staff'],
+    'director' => ['label' => 'Director', 'name' => 'Director', 'scope' => 'Akses direktur seluruh wilayah, unit, dan staff'],
     'senior' => ['label' => 'Senior Manager', 'name' => 'Senior Manager', 'scope' => 'Semua wilayah, unit, dan staff'],
     'mentor' => ['label' => 'Mentor', 'name' => 'Mentor', 'scope' => 'Monitoring dashboard dan target tanpa kelola user'],
     'koordinator' => ['label' => 'Koordinator Wilayah', 'name' => 'Koordinator Wilayah', 'scope' => 'Wilayah yang menjadi tanggung jawab'],
@@ -24,9 +27,11 @@ if (!isset($roles[$role])) {
 $menus = [
     'dashboard' => 'Dashboard Utama',
     'pencapaian' => 'Pencapaian Staff',
+    'jadwal-koordinator' => 'Jadwal Koordinator',
     'bdc-users' => 'BDC Marketing',
+    'konten' => 'Monitoring Konten Kampus',
     'kegiatan' => 'Kegiatan Marketing',
-    'anggaran' => 'Laporan Iklan',
+    'anggaran' => 'Anggaran & Laporan Iklan',
     'aktivitas' => 'Aktivitas Lain',
     'rekap' => 'Laporan & Rekap',
     'role' => 'User & Role',
@@ -93,8 +98,11 @@ function log_actor_label(array $log): string
 function can_action(string $role, string $action): bool
 {
     $rules = [
+        'super_user' => ['detail', 'setujui', 'tolak', 'revisi', 'export'],
+        'executive_director' => ['detail', 'setujui', 'tolak', 'revisi', 'export'],
+        'director' => ['detail', 'setujui', 'tolak', 'revisi', 'export'],
         'senior' => ['detail', 'setujui', 'tolak', 'revisi', 'export'],
-        'mentor' => ['detail', 'setujui', 'tolak', 'revisi', 'export'],
+        'mentor' => ['detail', 'export'],
         'koordinator' => ['detail', 'verifikasi', 'revisi', 'export-wilayah'],
         'staff' => ['detail', 'edit-draft', 'hapus-draft'],
     ];
@@ -104,6 +112,9 @@ function can_action(string $role, string $action): bool
 function allowed_effective_roles(string $actualRole): array
 {
     return [
+        'super_user' => ['super_user', 'executive_director', 'director', 'senior', 'mentor', 'koordinator', 'staff'],
+        'executive_director' => ['executive_director', 'director', 'senior', 'mentor', 'koordinator', 'staff'],
+        'director' => ['director', 'senior', 'mentor', 'koordinator', 'staff'],
         'senior' => ['senior', 'mentor', 'koordinator', 'staff'],
         'mentor' => ['mentor', 'koordinator', 'staff'],
         'koordinator' => ['koordinator', 'staff'],
@@ -123,6 +134,7 @@ $summary = [
 ];
 $activities = [];
 $ads = [];
+$socialContent = ['totals' => [], 'regionals' => [], 'posts' => [], 'accounts' => []];
 $otherActivities = [];
 $logs = [];
 $detailReport = null;
@@ -193,6 +205,8 @@ if ($page === 'rekap' && $rekapType === 'staff' && !$hasManualRekapDate) {
 $rekapReports = [];
 $rekapSummary = [];
 $whatsappArtifact = null;
+$coordinatorScheduleFilters = rsm_coordinator_schedule_filters();
+$coordinatorSchedules = ['rows' => [], 'grouped' => [], 'summary' => [], 'month' => date('Y-m')];
 
 try {
     rsm_ensure_schema();
@@ -226,10 +240,13 @@ try {
     if (count($allowedRoleKeys) > 1) {
         $roleQuery = '&role=' . rawurlencode($role);
     }
-    if ($page === 'users' && ($authUser['role'] ?? '') !== 'senior') {
+    if ($page === 'users' && !in_array((string) ($authUser['role'] ?? ''), ['super_user', 'senior'], true)) {
         $page = 'dashboard';
     }
-    if ($page === 'targets' && !in_array((string) ($authUser['role'] ?? ''), ['senior', 'mentor'], true)) {
+    if ($page === 'targets' && !in_array((string) ($authUser['role'] ?? ''), ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
+        $page = 'dashboard';
+    }
+    if ($page === 'campuses') {
         $page = 'dashboard';
     }
 
@@ -246,6 +263,16 @@ try {
         $notice = rsm_handle_post($area, $role);
         $authUser = rsm_auth_user();
     }
+    if ($authUser && in_array($postAction, ['impersonate_user', 'stop_impersonation'], true)) {
+        $actualRole = (string) $authUser['role'];
+        $allowedRoleKeys = allowed_effective_roles($actualRole);
+        $role = $actualRole;
+        $roleQuery = count($allowedRoleKeys) > 1 ? '&role=' . rawurlencode($role) : '';
+    }
+    if (!empty($_SESSION['rsm_meta_notice']) && is_string($_SESSION['rsm_meta_notice'])) {
+        $notice = (string) $_SESSION['rsm_meta_notice'];
+        unset($_SESSION['rsm_meta_notice']);
+    }
 
     $impersonationSource = rsm_impersonation_source();
     $impersonationAdmin = $impersonationSource ?: $authUser;
@@ -256,7 +283,19 @@ try {
     $references = rsm_reference_options($area, $authUser, $role);
     $summary = rsm_summary($area, $authUser);
     $activities = rsm_reports($area, 'marketing', 50, $authUser);
-    $ads = rsm_reports($area, 'ads', 50, $authUser);
+    $adsReportFilters = [];
+    if ($page === 'anggaran') {
+        $adsReportFilters = [
+            'date_from' => (string) ($dashboardFilters['date_from'] ?? ''),
+            'date_to' => (string) ($dashboardFilters['date_to'] ?? ''),
+        ];
+    }
+    $ads = rsm_reports($area, 'ads', $page === 'anggaran' ? 500 : 50, $authUser, $adsReportFilters);
+    $adBudgetPeriod = rsm_default_ad_period((string) ($dashboardFilters['date_from'] ?? date('Y-m-d')));
+    $adBudgetSummaries = $page === 'anggaran' ? rsm_ad_budget_summaries($area, $adBudgetPeriod, $authUser) : [];
+    if ($page === 'konten') {
+        $socialContent = rsm_social_summary($area, $dashboardFilters, $authUser);
+    }
     $otherActivities = rsm_reports($area, 'other', 50, $authUser);
     $logs = rsm_logs($area, 20, $authUser);
     if ($page === 'dashboard' || $page === 'closing-kampus') {
@@ -308,18 +347,23 @@ try {
     } elseif ($page === 'bdc-users') {
         $bdcReportUsers = rsm_bdc_report_users();
         $syncHealth = rsm_sync_health_status();
+    } elseif ($page === 'jadwal-koordinator') {
+        $coordinatorScheduleFilters = rsm_coordinator_schedule_filters();
+        $coordinatorSchedules = rsm_coordinator_schedules($area, $coordinatorScheduleFilters, $authUser);
     } elseif ($page === 'rekap') {
         $dashboardOverview = rsm_dashboard_overview($area, $dashboardFilters, $authUser);
         $staffAchievement = rsm_collab_staff_performance($area, $dashboardFilters, $authUser);
         $achievementUsers = rsm_users($area);
         $reportType = in_array($rekapType, ['marketing', 'ads', 'other'], true) ? $rekapType : null;
         $rekapReports = rsm_rekap_reports($area, $dashboardFilters, $reportType, 300, $authUser);
-        $whatsappArtifact = rsm_latest_achievement_whatsapp_artifact();
+        $whatsappArtifact = is_array($GLOBALS['rsm_last_whatsapp_artifact'] ?? null)
+            ? $GLOBALS['rsm_last_whatsapp_artifact']
+            : rsm_latest_achievement_whatsapp_artifact();
     }
-    if ($page === 'targets' && in_array((string) ($authUser['role'] ?? ''), ['senior', 'mentor'], true)) {
+    if ($page === 'targets' && in_array((string) ($authUser['role'] ?? ''), ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
         $monthlyTargets = rsm_monthly_targets($area);
     }
-    if ($page === 'users' && ($authUser['role'] ?? '') === 'senior') {
+    if ($page === 'users' && in_array((string) ($authUser['role'] ?? ''), ['super_user', 'senior'], true)) {
         $managedUsers = rsm_users($area);
     }
     if ($page === 'profile') {
@@ -426,9 +470,9 @@ foreach ($topStaffAchievement as &$topStaffRow) {
 }
 unset($topStaffRow);
 $topStaffAchievement = array_values(array_filter($topStaffAchievement, static function (array $row): bool {
-    return !in_array((string) ($row['user_role'] ?? ''), ['senior', 'mentor', 'koordinator'], true);
+    return !in_array((string) ($row['user_role'] ?? ''), ['super_user', 'executive_director', 'director', 'senior', 'mentor', 'koordinator'], true);
 }));
-if (($authUser['role'] ?? '') === 'senior') {
+if (in_array((string) ($authUser['role'] ?? ''), ['super_user', 'executive_director', 'director', 'senior'], true)) {
     $topStaffAchievement = array_slice($topStaffAchievement, 0, 5);
 }
 $topStaffMaxValue = 0.0;
@@ -495,10 +539,10 @@ if ($page === 'rekap' && $dbError === null) {
         <?php foreach ($adminMenus as $key => $label): ?>
           <?php
             $actualNavRole = (string) ($authUser['role'] ?? '');
-            if ($key === 'users' && $actualNavRole !== 'senior') {
+            if ($key === 'users' && !in_array($actualNavRole, ['super_user', 'senior'], true)) {
                 continue;
             }
-            if ($key === 'targets' && !in_array($actualNavRole, ['senior', 'mentor'], true)) {
+            if ($key === 'targets' && !in_array($actualNavRole, ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
                 continue;
             }
           ?>
@@ -584,8 +628,6 @@ if ($page === 'rekap' && $dbError === null) {
             <label><span>Unit/Kampus</span><select name="unit_name"><option value="">Semua Unit/Kampus</option><?php foreach ($references['campuses'] as $campusOption): $value = (string) $campusOption['label']; ?><option value="<?= h($value) ?>"<?= selected_attr((string) $dashboardFilters['unit_name'], $value) ?>><?= h($value) ?></option><?php endforeach; ?></select></label>
             <label><span>Staff</span><select name="staff_name"><option value="">Semua Staff</option><?php foreach ($references['staff'] as $staffOption): $value = (string) $staffOption['name']; ?><option value="<?= h($value) ?>"<?= selected_attr((string) $dashboardFilters['staff_name'], $value) ?>><?= h($value) ?></option><?php endforeach; ?></select></label>
           <?php endif; ?>
-          <label><span>Platform</span><select name="platform"><option value="">Semua Platform</option><?php foreach (array_filter($dashboardOverview['status_map']['report_type'] ? array_unique(array_map(static fn (array $row): string => (string) ($row['platform'] ?? ''), $ads)) : []) as $platformOption): ?><option value="<?= h($platformOption) ?>"<?= selected_attr((string) $dashboardFilters['platform'], $platformOption) ?>><?= h($platformOption) ?></option><?php endforeach; ?></select></label>
-          <label><span>Status</span><select name="status"><option value="">Semua Status</option><?php foreach ($dashboardOverview['status_map']['status'] as $statusOption): ?><option value="<?= h((string) $statusOption) ?>"<?= selected_attr((string) $dashboardFilters['status'], (string) $statusOption) ?>><?= h((string) $statusOption) ?></option><?php endforeach; ?></select></label>
           <div class="filter-actions"><button class="primary-btn">Terapkan</button><a class="secondary-btn" href="<?= h(url_for('dashboard', $role)) ?>">Reset</a></div>
         </form>
         <section class="summary-grid">
@@ -825,6 +867,8 @@ if ($page === 'rekap' && $dbError === null) {
           <?php render_regional_achievement_summary($staffAchievement['regional_summary'] ?? [], $achievementRegionalTargets); ?>
           <?php render_staff_achievement_table($staffAchievement['rows'] ?? []); ?>
         </section>
+      <?php elseif ($page === 'jadwal-koordinator'): ?>
+        <?php render_coordinator_schedule_page($coordinatorScheduleFilters, $coordinatorSchedules, $references, $authUser, $role); ?>
       <?php elseif ($page === 'bdc-users'): ?>
         <?php
           $bdcAllowedRegionals = rsm_area_regionals($area);
@@ -885,6 +929,38 @@ if ($page === 'rekap' && $dbError === null) {
             </table>
           </div>
         </section>
+      <?php elseif ($page === 'konten'): ?>
+        <?php $socialTotals = (array) ($socialContent['totals'] ?? []); ?>
+        <section class="summary-grid five">
+          <article class="summary-card tone-blue"><span>Akun Kampus</span><strong><?= h(number_format((int) ($socialTotals['accounts'] ?? 0), 0, ',', '.')) ?></strong><small>Instagram aktif</small></article>
+          <article class="summary-card tone-green"><span>Feed</span><strong><?= h(number_format((int) ($socialTotals['feed'] ?? 0), 0, ',', '.')) ?></strong><small>Periode aktif</small></article>
+          <article class="summary-card tone-purple"><span>Reels</span><strong><?= h(number_format((int) ($socialTotals['reels'] ?? 0), 0, ',', '.')) ?></strong><small>Periode aktif</small></article>
+          <article class="summary-card tone-amber"><span>Story</span><strong><?= h(number_format((int) ($socialTotals['story'] ?? 0), 0, ',', '.')) ?></strong><small>Periode aktif</small></article>
+          <article class="summary-card tone-cyan"><span>Poin Konten</span><strong><?= h(number_format((int) ($socialTotals['score'] ?? 0), 0, ',', '.')) ?></strong><small>Feed, reels, story, keyword</small></article>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><h2>Filter Monitoring Konten</h2><span>Default hari ini</span></div>
+          <form class="filter-bar dashboard-filter" method="get">
+            <input type="hidden" name="page" value="konten">
+            <?php if (count($allowedRoleKeys) > 1): ?><input type="hidden" name="role" value="<?= h($role) ?>"><?php endif; ?>
+            <label><span>Dari tanggal</span><input type="date" name="date_from" value="<?= h((string) $dashboardFilters['date_from']) ?>"></label>
+            <label><span>Sampai tanggal</span><input type="date" name="date_to" value="<?= h((string) $dashboardFilters['date_to']) ?>"></label>
+            <label><span>Wilayah</span><select name="wilayah"><option value="">Semua Wilayah</option><?php foreach ($references['regionals'] as $regional): ?><option value="<?= h((string) $regional) ?>"<?= selected_attr((string) $dashboardFilters['wilayah'], (string) $regional) ?>><?= h((string) $regional) ?></option><?php endforeach; ?></select></label>
+            <label><span>Unit/Kampus</span><select name="unit_name"><option value="">Semua Unit/Kampus</option><?php foreach ($references['campuses'] as $campus): ?><option value="<?= h((string) $campus['label']) ?>"<?= selected_attr((string) $dashboardFilters['unit_name'], (string) $campus['label']) ?>><?= h((string) $campus['label']) ?></option><?php endforeach; ?></select></label>
+            <div class="filter-actions"><button class="primary-btn">Terapkan</button><a class="secondary-btn" href="<?= h(url_for('konten', $role)) ?>">Reset</a></div>
+          </form>
+        </section>
+        <?php render_social_content_forms((array) ($socialContent['accounts'] ?? []), $references, $authUser); ?>
+        <section class="dashboard-grid">
+          <article class="panel">
+            <div class="panel-head"><h2>Ringkasan Regional</h2><span>Skor konten kampus</span></div>
+            <?php render_social_regional_table((array) ($socialContent['regionals'] ?? [])); ?>
+          </article>
+          <article class="panel">
+            <div class="panel-head"><h2>Aktivitas Konten Terbaru</h2><span>Feed, reels, story</span></div>
+            <?php render_social_posts_table((array) ($socialContent['posts'] ?? [])); ?>
+          </article>
+        </section>
       <?php elseif ($page === 'targets'): ?>
         <section class="panel">
           <div class="panel-head"><h2>Target Pencapaian Per Bulan</h2><span>Diatur oleh Senior Manager atau Mentor sebagai acuan dashboard</span></div>
@@ -930,23 +1006,36 @@ if ($page === 'rekap' && $dbError === null) {
         </section>
       <?php elseif ($page === 'anggaran'): ?>
         <?php
-          $adsLeadsTotal = array_sum(array_map(static fn (array $row): int => (int) ($row['leads_count'] ?? 0), $ads));
-          $adsClosingTotal = array_sum(array_map(static fn (array $row): int => (int) ($row['closing_count'] ?? 0), $ads));
+          $adsPageTotals = ads_group_totals();
+          foreach ($ads as $adsRow) {
+              ads_group_add($adsPageTotals, $adsRow);
+          }
+          $adsPageRemaining = (float) $adsPageTotals['requested'] - (float) $adsPageTotals['realization'];
         ?>
         <section class="summary-grid five">
-          <article class="summary-card tone-purple"><span>Total anggaran</span><strong><?= h(money_idr((float) $summary['budget_total'])) ?></strong><small>Pengajuan bulan ini</small></article>
-          <article class="summary-card tone-green"><span>Total realisasi</span><strong><?= h(money_idr((float) $summary['realization_total'])) ?></strong><small>Pemakaian aktual</small></article>
-          <article class="summary-card tone-amber"><span>Sisa anggaran</span><strong><?= h(money_idr((float) $summary['budget_total'] - (float) $summary['realization_total'])) ?></strong><small>Belum digunakan</small></article>
-          <article class="summary-card tone-blue"><span>Leads iklan</span><strong><?= h((string) $adsLeadsTotal) ?></strong><small>Semua platform</small></article>
-          <article class="summary-card tone-cyan"><span>Closing iklan</span><strong><?= h((string) $adsClosingTotal) ?></strong><small>Dari status closing data hasil iklan</small></article>
+          <article class="summary-card tone-purple"><span>Total anggaran</span><strong><?= h(money_idr((float) $adsPageTotals['requested'])) ?></strong><small>Total dari tabel aktif</small></article>
+          <article class="summary-card tone-green"><span>Total realisasi</span><strong><?= h(money_idr((float) $adsPageTotals['realization'])) ?></strong><small>Total dari tabel aktif</small></article>
+          <article class="summary-card tone-amber"><span>Sisa anggaran</span><strong><?= h(money_idr($adsPageRemaining)) ?></strong><small>Anggaran dikurangi realisasi</small></article>
+          <article class="summary-card tone-blue"><span>Leads iklan</span><strong><?= h(number_format((int) $adsPageTotals['leads'], 0, ',', '.')) ?></strong><small>Total dari tabel aktif</small></article>
+          <article class="summary-card tone-cyan"><span>Closing iklan</span><strong><?= h(number_format((int) $adsPageTotals['closing'], 0, ',', '.')) ?></strong><small>Total dari tabel aktif</small></article>
         </section>
-        <?php render_form_panel('Input Anggaran Iklan', [
-            'Tanggal', 'Wilayah', 'Unit/Kampus', 'Platform iklan', 'Nama campaign', 'Tujuan iklan',
-            'Anggaran diajukan', 'Anggaran disetujui', 'Realisasi pemakaian',
-            'CPL / Cost per Lead', 'Link campaign', 'Upload bukti invoice/screenshot', 'Upload data hasil iklan (.xls/.xlsx)', 'Catatan performa iklan'
-        ], ['Meta Ads', 'Google Ads', 'TikTok Ads', 'WhatsApp Blast', 'Marketplace/Portal', 'Lainnya'], ['Pengajuan', 'Disetujui', 'Ditolak', 'Berjalan', 'Selesai', 'Revisi'], 'create_ads', $references, $authUser); ?>
+        <?php render_ad_budget_limit_panel($adBudgetPeriod, $adBudgetSummaries, $references, $authUser); ?>
+        <?php if ($role === 'koordinator'): ?>
+        <?php render_form_panel('Pengajuan Iklan', [
+            'Tanggal', 'Periode Iklan', 'Wilayah', 'Unit/Kampus', 'Platform iklan', 'Anggaran diajukan'
+        ], ['Meta Ads', 'IG', 'FB', 'Google Ads', 'TikTok Ads', 'WhatsApp Blast', 'Marketplace/Portal', 'Lainnya'], ['Pengajuan'], 'create_ads', $references, $authUser); ?>
+        <?php endif; ?>
         <section class="panel">
-          <div class="panel-head"><h2>Laporan Iklan</h2><button class="primary-btn">Tambah Iklan</button></div>
+          <div class="panel-head"><h2>Anggaran & Laporan Iklan</h2><?php if ($role === 'koordinator'): ?><button class="primary-btn">Tambah Iklan</button><?php endif; ?></div>
+          <form class="filter-bar dashboard-filter ads-date-filter" method="get">
+            <input type="hidden" name="page" value="anggaran">
+            <?php if (count($allowedRoleKeys) > 1): ?>
+              <input type="hidden" name="role" value="<?= h($role) ?>">
+            <?php endif; ?>
+            <label><span>Dari tanggal</span><input type="date" name="date_from" value="<?= h((string) $dashboardFilters['date_from']) ?>"></label>
+            <label><span>Sampai tanggal</span><input type="date" name="date_to" value="<?= h((string) $dashboardFilters['date_to']) ?>"></label>
+            <div class="filter-actions"><button class="primary-btn">Terapkan</button><a class="secondary-btn" href="<?= h(url_for('anggaran', $role)) ?>">Reset</a></div>
+          </form>
           <?php render_ads_table($ads, $role); ?>
         </section>
       <?php elseif ($page === 'aktivitas'): ?>
@@ -1082,7 +1171,7 @@ if ($page === 'rekap' && $dbError === null) {
             <p class="muted">Pastikan laporan yang dibuka berasal dari <?= h($area) ?>.</p>
             <a class="secondary-btn" href="<?= h(url_for('dashboard', $role)) ?>">Kembali ke Dashboard</a>
           </section>
-        <?php elseif (!can_edit_report($role, (string) $editReport['status'])): ?>
+        <?php elseif (!can_edit_report($role, (string) $editReport['status'], (string) ($editReport['report_type'] ?? ''))): ?>
           <section class="panel">
             <div class="panel-head"><h2>Tidak bisa diedit</h2><span>Status laporan: <?= h((string) $editReport['status']) ?></span></div>
             <p class="muted">Role Staff Unit hanya bisa mengedit laporan berstatus Draft atau Revisi.</p>
@@ -1110,7 +1199,7 @@ if ($page === 'rekap' && $dbError === null) {
         </section>
       <?php elseif ($page === 'profile'): ?>
         <?php render_profile_page($profileData ?: ['target' => $authUser, 'allowed_users' => [], 'stats' => [], 'level' => [], 'xp' => 0, 'league' => 'Starter', 'status_performa' => 'Belum ada data', 'joined_label' => '-', 'streak' => ['current' => 0, 'longest' => 0], 'competencies' => [], 'badges' => [], 'kpis' => [], 'activities' => [], 'history' => [], 'score' => 0], $authUser, $role); ?>
-      <?php elseif ($page === 'users' && ($authUser['role'] ?? '') === 'senior'): ?>
+      <?php elseif ($page === 'users' && in_array((string) ($authUser['role'] ?? ''), ['super_user', 'senior'], true)): ?>
         <section class="panel form-panel">
           <div class="panel-head">
             <div>
@@ -1124,7 +1213,7 @@ if ($page === 'rekap' && $dbError === null) {
             <label><span>Nama</span><input name="name" required></label>
             <label><span>NIK</span><input name="nik" placeholder="Opsional"></label>
             <label><span>Username</span><input name="username" required></label>
-            <label><span>Role</span><select name="user_role"><option value="staff">Staff Unit</option><option value="koordinator">Koordinator Wilayah</option><option value="mentor">Mentor</option><option value="senior">Senior Manager</option></select></label>
+            <label><span>Role</span><select name="user_role"><option value="staff">Staff Unit</option><option value="koordinator">Koordinator Wilayah</option><option value="mentor">Mentor</option><option value="senior">Senior Manager</option><option value="director">Director</option><option value="executive_director">Executive Director</option><option value="super_user">Super User</option></select></label>
             <label><span>Area</span><select name="area" class="js-area-select"><option <?= $area === 'Regional A' ? 'selected' : '' ?>>Regional A</option><option <?= $area === 'Regional B' ? 'selected' : '' ?>>Regional B</option></select></label>
             <label><span>Regional</span><select name="regional" class="js-regional-select"><option value="">Pilih regional</option><?php foreach (['Regional 1', 'Regional 2', 'Regional 3', 'Regional 4', 'Regional 5', 'Regional 6', 'Regional 7'] as $regionalOption): $optionArea = in_array($regionalOption, ['Regional 1', 'Regional 2', 'Regional 3'], true) ? 'Regional A' : 'Regional B'; ?><option data-area="<?= h($optionArea) ?>"><?= h($regionalOption) ?></option><?php endforeach; ?></select></label>
             <label><span>Kampus/Unit</span><select name="campus_name"><option value="">Pilih kampus/unit</option><?php foreach ($references['campuses'] as $campusOption): $campusLabel = (string) ($campusOption['label'] ?? ''); if ($campusLabel === '') { continue; } ?><option value="<?= h($campusLabel) ?>"><?= h($campusLabel) ?><?= !empty($campusOption['regional']) ? ' - ' . h((string) $campusOption['regional']) : '' ?></option><?php endforeach; ?></select></label>
@@ -1168,6 +1257,13 @@ if ($page === 'rekap' && $dbError === null) {
       <?php endif; ?>
     </main>
   </div>
+  <?php if ($notice && $postAction === 'create_ads'): ?>
+    <script>
+      window.addEventListener('DOMContentLoaded', function () {
+        window.alert(<?= json_encode($notice, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>);
+      });
+    </script>
+  <?php endif; ?>
   <script src="assets/app.js?v=<?= h((string) @filemtime(__DIR__ . '/assets/app.js')) ?>"></script>
 </body>
 </html>
@@ -1221,6 +1317,204 @@ function render_sync_health_panel(array $health): void
         <span>BDC Marketing</span>
         <strong><?= h((string) ($bdc['status'] ?? '-')) ?></strong>
         <small><?= h((string) (($bdc['synced_at'] ?? '') ?: 'Belum sinkron')) ?><?= !empty($bdc['rows_count']) ? ' - ' . h(number_format((int) $bdc['rows_count'], 0, ',', '.')) . ' snapshot' : '' ?></small>
+      </div>
+    </section>
+    <?php
+}
+
+function date_id_label(string $date): string
+{
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+        return $date;
+    }
+    $timestamp = strtotime($date);
+    $days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+    return $days[(int) date('w', $timestamp)] . ', ' . date('d/m/Y', $timestamp);
+}
+
+function render_coordinator_schedule_page(array $filters, array $schedules, array $references, ?array $authUser, string $role): void
+{
+    $profiles = rsm_coordinator_profiles();
+    $month = (string) ($filters['month'] ?? date('Y-m'));
+    $canManage = rsm_can_manage_coordinator_schedule($authUser);
+    $summary = (array) ($schedules['summary'] ?? []);
+    $grouped = (array) ($schedules['grouped'] ?? []);
+    ?>
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>Filter Jadwal Koordinator</h2>
+          <span>Rencana kunjungan fisik dan Zoom per bulan</span>
+        </div>
+        <?php if ($canManage): ?>
+          <form method="post" class="inline-action-form">
+            <?= rsm_csrf_field() ?>
+            <input type="hidden" name="action" value="generate_coordinator_schedule">
+            <input type="hidden" name="schedule_month" value="<?= h($month) ?>">
+            <button class="primary-btn">Generate Bulan Ini</button>
+          </form>
+        <?php endif; ?>
+      </div>
+      <form class="filter-bar dashboard-filter schedule-filter" method="get">
+        <input type="hidden" name="page" value="jadwal-koordinator">
+        <?php if (count($GLOBALS['allowedRoleKeys'] ?? []) > 1): ?><input type="hidden" name="role" value="<?= h($role) ?>"><?php endif; ?>
+        <label><span>Bulan</span><input type="month" name="month" value="<?= h($month) ?>"></label>
+        <label><span>Wilayah</span><select name="wilayah"><option value="">Semua Wilayah</option><?php foreach ($references['regionals'] as $regional): ?><option value="<?= h((string) $regional) ?>"<?= selected_attr((string) ($filters['wilayah'] ?? ''), (string) $regional) ?>><?= h((string) $regional) ?></option><?php endforeach; ?></select></label>
+        <label><span>Koordinator</span><select name="koordinator"><option value="">Semua Korwil</option><?php foreach ($profiles as $profile): ?><option value="<?= h((string) $profile['name']) ?>"<?= selected_attr((string) ($filters['koordinator'] ?? ''), (string) $profile['name']) ?>><?= h((string) $profile['name']) ?></option><?php endforeach; ?></select></label>
+        <label><span>Status</span><select name="status"><option value="">Semua Status</option><?php foreach (['Rencana', 'Dijadwalkan', 'Selesai', 'Reschedule'] as $status): ?><option value="<?= h($status) ?>"<?= selected_attr((string) ($filters['status'] ?? ''), $status) ?>><?= h($status) ?></option><?php endforeach; ?></select></label>
+        <div class="filter-actions"><button class="primary-btn">Terapkan</button><a class="secondary-btn" href="<?= h(url_for('jadwal-koordinator', $role)) ?>">Reset</a></div>
+      </form>
+    </section>
+
+    <section class="summary-grid four">
+      <?php foreach (rsm_area_regionals('Regional B') as $regional): ?>
+        <?php $row = $summary[$regional] ?? ['total' => 0, 'Fisik' => 0, 'Zoom' => 0, 'Telepon' => 0, 'Selesai' => 0]; ?>
+        <article class="summary-card tone-blue">
+          <span><?= h($regional) ?></span>
+          <strong><?= h(number_format((int) ($row['total'] ?? 0), 0, ',', '.')) ?> agenda</strong>
+          <small><?= h(number_format((int) ($row['Fisik'] ?? 0), 0, ',', '.')) ?> fisik, <?= h(number_format((int) ($row['Zoom'] ?? 0), 0, ',', '.')) ?> Zoom, <?= h(number_format((int) ($row['Selesai'] ?? 0), 0, ',', '.')) ?> selesai</small>
+        </article>
+      <?php endforeach; ?>
+    </section>
+
+    <?php if ($canManage): ?>
+      <section class="panel form-panel">
+        <div class="panel-head"><h2>Tambah Agenda Kunjungan</h2><span>Koordinator dapat mengisi hasil setelah kunjungan selesai</span></div>
+        <form class="data-form" method="post">
+          <?= rsm_csrf_field() ?>
+          <input type="hidden" name="action" value="save_coordinator_schedule">
+          <label><span>Tanggal</span><input type="date" name="schedule_date" value="<?= h(date('Y-m-d')) ?>" required></label>
+          <label><span>Wilayah</span><select name="wilayah" class="js-campus-regional-select" required>
+            <option value="">Pilih wilayah</option>
+            <?php foreach ($references['regionals'] as $regional): ?>
+              <option value="<?= h((string) $regional) ?>"<?= selected_attr((string) ($authUser['regional'] ?? ''), (string) $regional) ?>><?= h((string) $regional) ?></option>
+            <?php endforeach; ?>
+          </select></label>
+          <label><span>Koordinator</span><select name="koordinator_name">
+            <?php foreach ($profiles as $regional => $profile): ?>
+              <option value="<?= h((string) $profile['name']) ?>"><?= h((string) $profile['name']) ?> - <?= h($regional) ?> (<?= h((string) $profile['home']) ?>)</option>
+            <?php endforeach; ?>
+          </select></label>
+          <label><span>Unit/Kampus</span><select name="unit_name" class="js-campus-filter-select" required><option value="">Pilih unit/kampus</option><?php foreach ($references['campuses'] as $campus): ?><option value="<?= h((string) $campus['label']) ?>" data-regional="<?= h((string) ($campus['regional'] ?? '')) ?>"><?= h((string) $campus['label']) ?></option><?php endforeach; ?></select></label>
+          <label><span>Tipe</span><select name="visit_type"><option>Fisik</option><option selected>Zoom</option><option>Telepon</option></select></label>
+          <label><span>Status</span><select name="status"><option>Rencana</option><option>Dijadwalkan</option><option>Selesai</option><option>Reschedule</option></select></label>
+          <label class="form-full"><span>Agenda</span><input name="agenda" value="Monitoring PMB, leads, iklan, dan action plan kampus"></label>
+          <label class="form-full"><span>Catatan hasil</span><textarea name="result_text" rows="3" placeholder="Diisi setelah kunjungan/Zoom selesai"></textarea></label>
+          <label class="form-full"><span>Follow up berikutnya</span><textarea name="next_action" rows="3" placeholder="Action plan, PIC kampus, kendala, kebutuhan support"></textarea></label>
+          <div class="form-actions form-full"><button class="primary-btn">Simpan Jadwal</button></div>
+        </form>
+      </section>
+    <?php endif; ?>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Jadwal Bulanan</h2><span><?= h(date('F Y', strtotime($month . '-01'))) ?></span></div>
+      <div class="schedule-regional-stack">
+        <?php if (empty($schedules['rows'])): ?>
+          <p class="muted">Belum ada jadwal untuk filter ini. Gunakan tombol generate atau tambah agenda manual.</p>
+        <?php endif; ?>
+        <?php foreach (rsm_area_regionals('Regional B') as $regional): ?>
+          <?php $rows = $grouped[$regional] ?? []; if ($rows === []) { continue; } ?>
+          <div class="schedule-regional-card">
+            <div class="schedule-regional-head">
+              <div><strong><?= h($regional) ?></strong><span><?= h((string) ($profiles[$regional]['name'] ?? 'Korwil')) ?> - domisili <?= h((string) ($profiles[$regional]['home'] ?? '-')) ?></span></div>
+              <b><?= h(number_format(count($rows), 0, ',', '.')) ?> agenda</b>
+            </div>
+            <div class="table-wrap schedule-table">
+              <table>
+                <thead><tr><th>Tanggal</th><th>Korwil</th><th>Unit/Kampus</th><th>Tipe</th><th>Agenda</th><th>Status</th><th>Hasil & Follow Up</th><th>Aksi</th></tr></thead>
+                <tbody>
+                <?php foreach ($rows as $row): ?>
+                  <tr>
+                    <td data-label="Tanggal"><strong><?= h(date_id_label((string) $row['schedule_date'])) ?></strong></td>
+                    <td data-label="Korwil"><?= h((string) $row['koordinator_name']) ?><small><?= h((string) (($row['koordinator_home'] ?? '') ?: '-')) ?></small></td>
+                    <td data-label="Unit/Kampus"><?= h((string) $row['unit_name']) ?></td>
+                    <td data-label="Tipe"><span class="visit-pill visit-<?= h(strtolower((string) $row['visit_type'])) ?>"><?= h((string) $row['visit_type']) ?></span></td>
+                    <td data-label="Agenda"><?= h((string) $row['agenda']) ?></td>
+                    <td data-label="Status"><?= badge((string) $row['status']) ?></td>
+                    <td data-label="Hasil & Follow Up">
+                      <strong><?= h((string) (($row['result_text'] ?? '') ?: '-')) ?></strong>
+                      <small><?= h((string) (($row['next_action'] ?? '') ?: 'Belum ada follow up')) ?></small>
+                      <?php if (!empty($row['attachment_path'])): ?>
+                        <a class="tiny-link" href="<?= h((string) $row['attachment_path']) ?>" target="_blank" rel="noopener">Lihat dokumentasi</a>
+                      <?php endif; ?>
+                    </td>
+                    <td data-label="Aksi">
+                      <?php if ($canManage): ?>
+                        <?php $editModalId = 'schedule-edit-modal-' . (int) $row['id']; $reportModalId = 'schedule-report-modal-' . (int) $row['id']; ?>
+                        <div class="schedule-action-buttons">
+                          <button class="secondary-btn compact-btn" type="button" data-modal-target="<?= h($editModalId) ?>">Edit</button>
+                          <button class="primary-btn compact-btn" type="button" data-modal-target="<?= h($reportModalId) ?>">Laporan</button>
+                          <form method="post" onsubmit="return confirm('Hapus jadwal ini?')">
+                            <?= rsm_csrf_field() ?>
+                            <input type="hidden" name="action" value="delete_coordinator_schedule">
+                            <input type="hidden" name="schedule_id" value="<?= h((string) $row['id']) ?>">
+                            <button class="icon-danger-btn compact-btn" title="Hapus jadwal">Hapus</button>
+                          </form>
+                        </div>
+                        <div class="schedule-modal" id="<?= h($editModalId) ?>" hidden>
+                          <div class="schedule-modal-backdrop" data-modal-close></div>
+                          <section class="schedule-modal-card" role="dialog" aria-modal="true" aria-labelledby="<?= h($editModalId) ?>-title">
+                            <div class="panel-head">
+                              <div>
+                                <h2 id="<?= h($editModalId) ?>-title">Edit Jadwal Koordinator</h2>
+                                <span><?= h(date_id_label((string) $row['schedule_date'])) ?> - <?= h((string) $row['koordinator_name']) ?></span>
+                              </div>
+                              <button class="modal-close-btn" type="button" data-modal-close aria-label="Tutup">Tutup</button>
+                            </div>
+                            <form class="data-form schedule-modal-form" method="post">
+                              <?= rsm_csrf_field() ?>
+                              <input type="hidden" name="action" value="update_coordinator_schedule">
+                              <input type="hidden" name="schedule_id" value="<?= h((string) $row['id']) ?>">
+                              <label><span>Unit/Kampus</span><select name="unit_name" required>
+                                <?php $currentUnit = (string) ($row['unit_name'] ?? ''); $currentRegional = (string) ($row['wilayah'] ?? ''); $currentUnitFound = false; ?>
+                                <?php foreach ($references['campuses'] as $campus): ?>
+                                  <?php $campusLabel = (string) ($campus['label'] ?? ''); $campusRegional = (string) ($campus['regional'] ?? ''); if ($campusRegional !== '' && $currentRegional !== '' && $campusRegional !== $currentRegional) { continue; } if ($campusLabel === $currentUnit) { $currentUnitFound = true; } ?>
+                                  <option value="<?= h($campusLabel) ?>"<?= selected_attr($currentUnit, $campusLabel) ?>><?= h($campusLabel) ?></option>
+                                <?php endforeach; ?>
+                                <?php if (!$currentUnitFound && $currentUnit !== ''): ?><option value="<?= h($currentUnit) ?>" selected><?= h($currentUnit) ?></option><?php endif; ?>
+                              </select></label>
+                              <label><span>Tipe</span><select name="visit_type"><?php foreach (['Fisik', 'Zoom', 'Telepon'] as $visitType): ?><option value="<?= h($visitType) ?>"<?= selected_attr((string) $row['visit_type'], $visitType) ?>><?= h($visitType) ?></option><?php endforeach; ?></select></label>
+                              <label class="form-full"><span>Agenda</span><input name="agenda" value="<?= h((string) $row['agenda']) ?>" required></label>
+                              <div class="form-actions form-full"><button class="primary-btn">Simpan Jadwal</button></div>
+                            </form>
+                          </section>
+                        </div>
+                        <div class="schedule-modal" id="<?= h($reportModalId) ?>" hidden>
+                          <div class="schedule-modal-backdrop" data-modal-close></div>
+                          <section class="schedule-modal-card" role="dialog" aria-modal="true" aria-labelledby="<?= h($reportModalId) ?>-title">
+                            <div class="panel-head">
+                              <div>
+                                <h2 id="<?= h($reportModalId) ?>-title">Laporan Hasil Kunjungan</h2>
+                                <span><?= h((string) $row['unit_name']) ?> - <?= h(date_id_label((string) $row['schedule_date'])) ?></span>
+                              </div>
+                              <button class="modal-close-btn" type="button" data-modal-close aria-label="Tutup">Tutup</button>
+                            </div>
+                            <form class="data-form schedule-modal-form" method="post" enctype="multipart/form-data">
+                              <?= rsm_csrf_field() ?>
+                              <input type="hidden" name="action" value="report_coordinator_schedule">
+                              <input type="hidden" name="schedule_id" value="<?= h((string) $row['id']) ?>">
+                              <label><span>Status</span><select name="status"><?php foreach (['Rencana', 'Dijadwalkan', 'Selesai', 'Reschedule'] as $status): ?><option value="<?= h($status) ?>"<?= selected_attr((string) $row['status'], $status) ?>><?= h($status) ?></option><?php endforeach; ?></select></label>
+                              <label class="form-full"><span>Catatan hasil</span><textarea name="result_text" rows="4" placeholder="Hasil kunjungan"><?= h((string) ($row['result_text'] ?? '')) ?></textarea></label>
+                              <label class="form-full"><span>Follow up berikutnya</span><textarea name="next_action" rows="4" placeholder="Follow up berikutnya"><?= h((string) ($row['next_action'] ?? '')) ?></textarea></label>
+                              <label class="form-full"><span>Upload dokumentasi aktivitas</span><input type="file" name="schedule_attachment" accept=".jpg,.jpeg,.png,.webp,.pdf"><small>JPG, PNG, WEBP, atau PDF. Maksimal 5 MB.</small></label>
+                              <?php if (!empty($row['attachment_path'])): ?>
+                                <div class="form-full"><a class="secondary-btn" href="<?= h((string) $row['attachment_path']) ?>" target="_blank" rel="noopener">Lihat dokumentasi saat ini</a></div>
+                              <?php endif; ?>
+                              <div class="form-actions form-full"><button class="primary-btn">Simpan Laporan</button></div>
+                            </form>
+                          </section>
+                        </div>
+                      <?php else: ?>
+                        <span class="muted">Lihat saja</span>
+                      <?php endif; ?>
+                    </td>
+                  </tr>
+                <?php endforeach; ?>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        <?php endforeach; ?>
       </div>
     </section>
     <?php
@@ -1391,7 +1685,7 @@ function render_profile_page(array $profile, array $authUser, string $role): voi
                 <article>
                   <time><?= h((string) ($activity['report_date'] ?? '-')) ?></time>
                   <strong><?= h((string) ($activity['title'] ?? '-')) ?></strong>
-                  <span><?= h((string) ($activity['report_type'] ?? '-')) ?> - <?= h((string) ($activity['unit_name'] ?? '-')) ?></span>
+                  <span><?= h((string) ($activity['report_type'] ?? '-')) ?> - <?= h(campus_canonical_label((string) ($activity['unit_name'] ?? '-'))) ?></span>
                   <small><?= h(number_format((float) ($activity['leads_count'] ?? 0), 0, ',', '.')) ?> leads, <?= h(number_format((float) ($activity['closing_count'] ?? 0), 0, ',', '.')) ?> closing - <?= h((string) ($activity['status'] ?? '-')) ?></small>
                 </article>
               <?php endforeach; ?>
@@ -1436,6 +1730,7 @@ function field_name_for(string $field): string
         'Jumlah prospek/leads' => 'leads_count',
         'Catatan' => 'notes',
         'Platform iklan' => 'platform',
+        'Periode Iklan' => 'ad_period',
         'Nama campaign' => 'campaign_name',
         'Tujuan iklan' => 'ad_goal',
         'Anggaran diajukan' => 'budget_requested',
@@ -1457,6 +1752,56 @@ function field_name_for(string $field): string
     ];
 
     return $map[$field] ?? strtolower(preg_replace('/[^a-z0-9]+/i', '_', $field) ?? $field);
+}
+
+function render_ad_budget_limit_panel(string $period, array $summaries, array $references, ?array $authUser): void
+{
+    $canManage = rsm_can_manage_ad_budget($authUser);
+    ?>
+    <section class="panel ad-budget-limit-panel">
+      <div class="panel-head">
+        <div>
+          <h2>Plafon Anggaran Regional</h2>
+          <span>Periode <?= h($period) ?>, pengajuan koordinator mengikuti sisa plafon regional.</span>
+        </div>
+      </div>
+      <?php if ($summaries): ?>
+        <div class="ad-budget-limit-grid">
+          <?php foreach ($summaries as $summaryRow): ?>
+            <?php
+              $limit = (float) ($summaryRow['budget_limit'] ?? 0);
+              $requested = (float) ($summaryRow['requested'] ?? 0);
+              $percent = $limit > 0 ? min(100, max(0, ($requested / $limit) * 100)) : 0;
+            ?>
+            <article class="ad-budget-limit-card">
+              <span><?= h((string) ($summaryRow['wilayah'] ?? '-')) ?></span>
+              <strong><?= h(money_idr($limit)) ?></strong>
+              <small>Diajukan <?= h(money_idr($requested)) ?>, sisa <?= h(money_idr((float) ($summaryRow['remaining'] ?? 0))) ?></small>
+              <div class="mini-progress"><i style="width: <?= h(number_format($percent, 2, '.', '')) ?>%"></i></div>
+            </article>
+          <?php endforeach; ?>
+        </div>
+      <?php else: ?>
+        <p class="muted">Belum ada plafon anggaran untuk periode ini.</p>
+      <?php endif; ?>
+      <?php if ($canManage): ?>
+        <form class="data-form compact-budget-form" method="post">
+          <?= rsm_csrf_field() ?>
+          <input type="hidden" name="action" value="save_ad_budget_limit">
+          <label><span>Periode anggaran</span><input name="ad_period" value="<?= h($period) ?>" placeholder="Juli 2026" required></label>
+          <label><span>Regional</span><select name="wilayah" required>
+            <option value="">Pilih regional</option>
+            <?php foreach ($references['regionals'] as $regionalOption): ?>
+              <option value="<?= h((string) $regionalOption) ?>"><?= h((string) $regionalOption) ?></option>
+            <?php endforeach; ?>
+          </select></label>
+          <label><span>Besaran anggaran</span><input name="budget_limit" inputmode="numeric" placeholder="Contoh: 5000000" required></label>
+          <label class="wide"><span>Catatan</span><input name="notes" placeholder="Opsional"></label>
+          <div class="form-actions"><button class="primary-btn">Simpan Plafon</button></div>
+        </form>
+      <?php endif; ?>
+    </section>
+    <?php
 }
 
 function is_staff_user(?array $authUser): bool
@@ -1491,6 +1836,7 @@ function render_locked_identity_input(string $field, string $name, ?array $authU
 function render_form_panel(string $title, array $fields, array $options, array $statuses, string $action, array $references, ?array $authUser = null): void
 {
     $showRegionalBAggregate = $action === 'create_ads' && !is_staff_user($authUser);
+    $defaultRegional = (string) (($authUser['regional'] ?? '') ?: '');
     ?>
     <section class="panel form-panel">
       <div class="panel-head">
@@ -1506,26 +1852,28 @@ function render_form_panel(string $title, array $fields, array $options, array $
             <span><?= h($field) ?></span>
             <?php if (str_contains(strtolower($field), 'tanggal')): ?>
               <input type="date" name="<?= h($name) ?>" value="<?= h(date('Y-m-d')) ?>">
+            <?php elseif ($field === 'Periode Iklan'): ?>
+              <input name="<?= h($name) ?>" value="<?= h(rsm_default_ad_period(date('Y-m-d'))) ?>" placeholder="Juli 2026">
             <?php elseif (is_staff_user($authUser) && in_array($field, ['Wilayah', 'Unit/Kampus', 'Nama staff'], true)): ?>
               <?php render_locked_identity_input($field, $name, $authUser, $references); ?>
             <?php elseif ($field === 'Wilayah'): ?>
-              <select name="<?= h($name) ?>" required>
+              <select name="<?= h($name) ?>" class="js-campus-regional-select" required>
                 <option value="">Pilih wilayah</option>
                 <?php if ($showRegionalBAggregate): ?>
                   <option value="Regional B">Regional B</option>
                 <?php endif; ?>
                 <?php foreach ($references['regionals'] as $regionalOption): ?>
-                  <option value="<?= h((string) $regionalOption) ?>"><?= h((string) $regionalOption) ?></option>
+                  <option value="<?= h((string) $regionalOption) ?>"<?= selected_attr($defaultRegional, (string) $regionalOption) ?>><?= h((string) $regionalOption) ?></option>
                 <?php endforeach; ?>
               </select>
             <?php elseif ($field === 'Unit/Kampus'): ?>
-              <select name="<?= h($name) ?>" required>
+              <select name="<?= h($name) ?>" class="js-campus-filter-select" required>
                 <option value="">Pilih unit/kampus</option>
                 <?php if ($showRegionalBAggregate): ?>
-                  <option value="Regional B">Regional B</option>
+                  <option value="Regional B" data-regional="Regional B">Regional B</option>
                 <?php endif; ?>
                 <?php foreach ($references['campuses'] as $campusOption): ?>
-                  <option value="<?= h((string) $campusOption['label']) ?>"><?= h((string) $campusOption['label']) ?><?= !empty($campusOption['kode_kampus']) ? ' [' . h(strtoupper((string) $campusOption['kode_kampus'])) . ']' : '' ?></option>
+                  <option value="<?= h((string) $campusOption['label']) ?>" data-regional="<?= h((string) ($campusOption['regional'] ?? '')) ?>"><?= h((string) $campusOption['label']) ?></option>
                 <?php endforeach; ?>
               </select>
             <?php elseif ($field === 'Nama staff'): ?>
@@ -1558,7 +1906,11 @@ function render_form_panel(string $title, array $fields, array $options, array $
           </label>
         <?php endforeach; ?>
         <label><span>Status</span><select name="status"><?php foreach ($statuses as $status): ?><option><?= h($status) ?></option><?php endforeach; ?></select></label>
-        <div class="form-actions"><button class="secondary-btn" name="status" value="Draft">Simpan Draft</button><button class="primary-btn">Kirim Laporan</button></div>
+        <?php if ($action === 'create_ads'): ?>
+          <div class="form-actions"><button class="primary-btn">Ajukan Iklan</button></div>
+        <?php else: ?>
+          <div class="form-actions"><button class="secondary-btn" name="status" value="Draft">Simpan Draft</button><button class="primary-btn">Kirim Laporan</button></div>
+        <?php endif; ?>
       </form>
     </section>
     <?php
@@ -1567,7 +1919,7 @@ function render_form_panel(string $title, array $fields, array $options, array $
 function render_edit_form(array $report, string $role, array $references, ?array $authUser = null): void
 {
     $type = (string) $report['report_type'];
-    $fields = report_fields_for_type($type);
+    $fields = report_fields_for_type($type, $role);
     $options = report_options_for_type($type);
     $statuses = ['Draft', 'Revisi'];
     ?>
@@ -1605,12 +1957,15 @@ function render_edit_input(string $field, string $name, array $report, array $op
     $value = (string) ($report[$name] ?? '');
     if (str_contains(strtolower($field), 'tanggal')) {
         ?><input type="date" name="<?= h($name) ?>" value="<?= h($value !== '' ? $value : date('Y-m-d')) ?>"><?php
+    } elseif ($field === 'Periode Iklan') {
+        $period = $value !== '' ? $value : rsm_default_ad_period((string) ($report['report_date'] ?? ''));
+        ?><input name="<?= h($name) ?>" value="<?= h($period) ?>" placeholder="Juli 2026"><?php
     } elseif (is_staff_user($authUser) && in_array($field, ['Wilayah', 'Unit/Kampus', 'Nama staff'], true)) {
         render_locked_identity_input($field, $name, $authUser, $references);
     } elseif ($field === 'Wilayah') {
         ?><select name="<?= h($name) ?>" required><?php foreach ($references['regionals'] as $regionalOption): ?><option value="<?= h((string) $regionalOption) ?>"<?= $value === (string) $regionalOption ? ' selected' : '' ?>><?= h((string) $regionalOption) ?></option><?php endforeach; ?></select><?php
     } elseif ($field === 'Unit/Kampus') {
-        ?><select name="<?= h($name) ?>" required><?php foreach ($references['campuses'] as $campusOption): $label = (string) $campusOption['label']; ?><option value="<?= h($label) ?>"<?= $value === $label ? ' selected' : '' ?>><?= h($label) ?><?= !empty($campusOption['kode_kampus']) ? ' [' . h(strtoupper((string) $campusOption['kode_kampus'])) . ']' : '' ?></option><?php endforeach; ?></select><?php
+        ?><select name="<?= h($name) ?>" required><?php foreach ($references['campuses'] as $campusOption): $label = (string) $campusOption['label']; ?><option value="<?= h($label) ?>"<?= $value === $label ? ' selected' : '' ?>><?= h($label) ?></option><?php endforeach; ?></select><?php
     } elseif ($field === 'Nama staff') {
         ?><select name="<?= h($name) ?>" required><?php foreach ($references['staff'] as $staffOption): $label = (string) $staffOption['name']; ?><option value="<?= h($label) ?>"<?= $value === $label ? ' selected' : '' ?>><?= h($label) ?> - <?= h((string) ($staffOption['regional'] ?? '-')) ?></option><?php endforeach; ?></select><?php
     } elseif ($name === 'ad_leads_file') {
@@ -1628,10 +1983,19 @@ function render_edit_input(string $field, string $name, array $report, array $op
     }
 }
 
-function report_fields_for_type(string $type): array
+function report_fields_for_type(string $type, string $role = ''): array
 {
     if ($type === 'ads') {
-        return ['Tanggal', 'Wilayah', 'Unit/Kampus', 'Platform iklan', 'Nama campaign', 'Tujuan iklan', 'Anggaran diajukan', 'Anggaran disetujui', 'Realisasi pemakaian', 'CPL / Cost per Lead', 'Link campaign', 'Upload bukti invoice/screenshot', 'Upload data hasil iklan (.xls/.xlsx)', 'Catatan performa iklan'];
+        if ($role === 'staff') {
+            return ['Nama campaign', 'Tujuan iklan', 'Realisasi pemakaian', 'CPL / Cost per Lead', 'Link campaign', 'Upload data hasil iklan (.xls/.xlsx)', 'Catatan performa iklan'];
+        }
+        if ($role === 'koordinator') {
+            return ['Tanggal', 'Periode Iklan', 'Wilayah', 'Unit/Kampus', 'Platform iklan', 'Anggaran diajukan', 'Upload bukti invoice/screenshot', 'Catatan performa iklan'];
+        }
+        if (in_array($role, ['super_user', 'executive_director', 'director', 'senior'], true)) {
+            return ['Tanggal', 'Periode Iklan', 'Wilayah', 'Unit/Kampus', 'Platform iklan', 'Anggaran diajukan', 'Anggaran disetujui', 'Upload bukti invoice/screenshot', 'Catatan performa iklan'];
+        }
+        return ['Tanggal', 'Periode Iklan', 'Wilayah', 'Unit/Kampus', 'Platform iklan', 'Nama campaign', 'Tujuan iklan', 'Anggaran diajukan', 'Realisasi pemakaian', 'CPL / Cost per Lead', 'Link campaign', 'Upload bukti invoice/screenshot', 'Upload data hasil iklan (.xls/.xlsx)', 'Catatan performa iklan'];
     }
     if ($type === 'other') {
         return ['Tanggal', 'Wilayah', 'Unit/Kampus', 'Nama staff', 'Kategori aktivitas', 'Deskripsi aktivitas', 'Hasil aktivitas', 'Kendala', 'Tindak lanjut', 'Upload dokumentasi'];
@@ -1642,7 +2006,7 @@ function report_fields_for_type(string $type): array
 function report_options_for_type(string $type): array
 {
     if ($type === 'ads') {
-        return ['Meta Ads', 'Google Ads', 'TikTok Ads', 'WhatsApp Blast', 'Marketplace/Portal', 'Lainnya'];
+        return ['Meta Ads', 'IG', 'FB', 'Google Ads', 'TikTok Ads', 'WhatsApp Blast', 'Marketplace/Portal', 'Lainnya'];
     }
     if ($type === 'other') {
         return ['Meeting internal', 'Briefing', 'Training', 'Koordinasi kampus', 'Koordinasi mitra', 'Pelayanan calon mahasiswa', 'Administrasi PMB', 'Follow up pembayaran', 'Herregistrasi', 'Lainnya'];
@@ -1652,7 +2016,7 @@ function report_options_for_type(string $type): array
 
 function report_label_for_type(string $type): string
 {
-    return ['ads' => 'Laporan Iklan', 'other' => 'Aktivitas Lain', 'marketing' => 'Kegiatan Marketing'][$type] ?? 'Laporan';
+    return ['ads' => 'Anggaran & Laporan Iklan', 'other' => 'Aktivitas Lain', 'marketing' => 'Kegiatan Marketing'][$type] ?? 'Laporan';
 }
 
 function render_collab_source_note(array $sources): void
@@ -1796,7 +2160,7 @@ function render_achievement_report(string $area, array $achievement, array $user
         if ($actualRole === 'staff') {
             $userName = mb_strtolower(trim((string) ($user['name'] ?? '')));
             $userNik = mb_strtolower(trim((string) ($user['nik'] ?? '')));
-            if ($role !== 'senior' && $role !== 'mentor' && $userName !== $authName && ($authNik === '' || $userNik !== $authNik)) {
+            if (!in_array($role, ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true) && $userName !== $authName && ($authNik === '' || $userNik !== $authNik)) {
                 continue;
             }
         }
@@ -1808,12 +2172,12 @@ function render_achievement_report(string $area, array $achievement, array $user
         if ($nikKey !== '') {
             $usersByNik[$nikKey] = $user;
         }
-        if ($role === 'senior' && !$senior) {
+        if (in_array($role, ['super_user', 'executive_director', 'director', 'senior'], true) && !$senior) {
             $senior = $user;
         }
         if ($role === 'koordinator') {
             $regional = (string) (($user['regional'] ?? '') ?: 'Tanpa Regional');
-            $coordinators[$regional][] = $user;
+            rsm_add_unique_coordinator($coordinators, $regional, $user);
         }
     }
 
@@ -1879,7 +2243,7 @@ function render_achievement_report(string $area, array $achievement, array $user
     ?>
     <div class="achievement-report">
       <article class="achievement-leader">
-        <?php render_achievement_person($leader, $leaderLabel, $visibleTotalRegistrasi, true); ?>
+        <?php render_achievement_person($leader, $leaderLabel, $visibleTotalRegistrasi, true, 'closing staff'); ?>
       </article>
       <div class="achievement-regional-grid">
         <?php for ($columnIndex = 0; $columnIndex < 2; $columnIndex++): ?>
@@ -1895,14 +2259,14 @@ function render_achievement_report(string $area, array $achievement, array $user
             <div class="achievement-regional-head">
               <div class="achievement-regional-title">
                 <span><?= h($regional) ?></span>
-                <strong><?= h(number_format($regionalRegistrasi, 0, ',', '.')) ?> closing</strong>
+                <strong><?= h(number_format($regionalRegistrasi, 0, ',', '.')) ?> closing staff</strong>
               </div>
               <div class="achievement-korwil-list">
                 <?php foreach (($coordinators[$regional] ?? []) as $coordinator): ?>
-                  <?php render_achievement_person($coordinator, 'Korwil', $regionalRegistrasi, false); ?>
+                  <?php render_achievement_person($coordinator, 'Korwil', $regionalRegistrasi, false, 'closing staff') ?>
                 <?php endforeach; ?>
                 <?php if (empty($coordinators[$regional])): ?>
-                  <?php render_achievement_person(['name' => 'Korwil belum diatur', 'photo_path' => ''], 'Korwil', $regionalRegistrasi, false); ?>
+                  <?php render_achievement_person(['name' => 'Korwil belum diatur', 'photo_path' => ''], 'Korwil', $regionalRegistrasi, false, 'closing staff'); ?>
                 <?php endif; ?>
               </div>
             </div>
@@ -1914,11 +2278,11 @@ function render_achievement_report(string $area, array $achievement, array $user
                 <div class="achievement-unit-card" data-unit="<?= h((string) $unit['unit']) ?>" data-closing="<?= h((string) $unit['registrasi']) ?>">
                   <div class="achievement-unit-title">
                     <strong><?= h((string) $unit['unit']) ?></strong>
-                    <span><?= h(number_format((float) $unit['registrasi'], 0, ',', '.')) ?> closing</span>
+                    <span><?= h(number_format((float) $unit['registrasi'], 0, ',', '.')) ?> closing staff</span>
                   </div>
                   <div class="achievement-staff-list">
                     <?php foreach ($unit['staff'] as $staff): ?>
-                      <?php render_achievement_person($staff, 'Staff', (float) $staff['registrasi'], false); ?>
+                      <?php render_achievement_person($staff, 'Staff', (float) $staff['registrasi'], false, 'closing staff'); ?>
                     <?php endforeach; ?>
                   </div>
                 </div>
@@ -1933,7 +2297,7 @@ function render_achievement_report(string $area, array $achievement, array $user
     <?php
 }
 
-function render_achievement_person(array $person, string $label, float $closing, bool $large = false): void
+function render_achievement_person(array $person, string $label, float $closing, bool $large = false, string $closingLabel = 'closing'): void
 {
     $name = (string) (($person['name'] ?? '') ?: '-');
     $photo = trim((string) ($person['photo_path'] ?? ''));
@@ -1950,7 +2314,7 @@ function render_achievement_person(array $person, string $label, float $closing,
       <div>
         <small><?= h($label) ?></small>
         <strong><?= h($name) ?></strong>
-        <em><?= h(number_format($closing, 0, ',', '.')) ?> closing</em>
+        <em><?= h(number_format($closing, 0, ',', '.')) ?> <?= h($closingLabel) ?></em>
       </div>
     </div>
     <?php
@@ -1960,6 +2324,7 @@ function render_whatsapp_artifact_panel(?array $artifact): void
 {
     $text = trim((string) ($artifact['text'] ?? ''));
     $generatedAt = (string) ($artifact['generated_at'] ?? '');
+    $generatedAtLabel = $generatedAt !== '' ? rsm_wib_datetime_label($generatedAt) : rsm_wib_datetime_label();
     $imageFile = (string) ($artifact['image_file'] ?? '');
     $imageError = (string) ($artifact['image_error'] ?? '');
     $period = is_array($artifact['period'] ?? null) ? $artifact['period'] : [];
@@ -1983,7 +2348,7 @@ function render_whatsapp_artifact_panel(?array $artifact): void
       <?php else: ?>
         <div class="whatsapp-safe-meta">
           <span>Periode: <?= h(rsm_format_date_id((string) ($period['date_from'] ?? ''))) ?> s/d <?= h(rsm_format_date_id((string) ($period['date_to'] ?? ''))) ?></span>
-          <span>Jam generate: <?= h($generatedAt) ?></span>
+          <span>Jam generate: <?= h($generatedAtLabel) ?></span>
           <?php if ($imageFile !== ''): ?><a href="<?= h($imageFile) ?>" target="_blank" rel="noopener">Buka gambar</a><?php endif; ?>
           <?php if ($imageError !== ''): ?><span>Gambar: <?= h($imageError) ?></span><?php endif; ?>
         </div>
@@ -2177,11 +2542,12 @@ function rekap_export_rows(string $area, array $filters, string $type, array $re
     }
 
     if ($type === 'ads') {
-        $rows[] = ['Tanggal', 'Regional', 'Unit/Kampus', 'Platform', 'Campaign', 'Anggaran', 'Realisasi', 'Leads', 'Closing', 'CPL', 'Status'];
+        $rows[] = ['Tanggal', 'Periode Iklan', 'Regional', 'Unit/Kampus', 'Platform', 'Campaign', 'Anggaran', 'Realisasi', 'Leads', 'Closing', 'CPL', 'Status'];
         foreach (ads_grouped_reports($reports) as $regionalGroup) {
             $regionalTotals = $regionalGroup['totals'] ?? [];
             $rows[] = [
                 'REGIONAL: ' . (string) ($regionalGroup['label'] ?? '-'),
+                '',
                 '',
                 (int) ($regionalTotals['count'] ?? 0) . ' laporan',
                 '',
@@ -2196,7 +2562,8 @@ function rekap_export_rows(string $area, array $filters, string $type, array $re
             foreach ((array) ($regionalGroup['campuses'] ?? []) as $campusGroup) {
                 $campusTotals = $campusGroup['totals'] ?? [];
                 $rows[] = [
-                    'Nama Kampus: ' . (string) ($campusGroup['label'] ?? '-'),
+                    (string) ($campusGroup['label'] ?? '-'),
+                    '',
                     '',
                     (int) ($campusTotals['count'] ?? 0) . ' laporan',
                     '',
@@ -2211,8 +2578,9 @@ function rekap_export_rows(string $area, array $filters, string $type, array $re
                 foreach ((array) ($campusGroup['rows'] ?? []) as $row) {
                     $rows[] = [
                         (string) ($row['report_date'] ?? ''),
+                        (string) (($row['ad_period'] ?? '') ?: rsm_default_ad_period((string) ($row['report_date'] ?? ''))),
                         (string) (($row['wilayah'] ?? '') ?: '-'),
-                        (string) (($row['unit_name'] ?? '') ?: '-'),
+                        campus_canonical_label((string) (($row['unit_name'] ?? '') ?: '-')),
                         (string) (($row['platform'] ?? '') ?: '-'),
                         (string) (($row['campaign_name'] ?? '') ?: ($row['title'] ?? '-')),
                         (float) ($row['budget_requested'] ?? 0),
@@ -2234,7 +2602,7 @@ function rekap_export_rows(string $area, array $filters, string $type, array $re
             (string) ($row['report_date'] ?? ''),
             report_type_label((string) ($row['report_type'] ?? '')),
             (string) ($row['wilayah'] ?? ''),
-            (string) ($row['unit_name'] ?? ''),
+            campus_canonical_label((string) ($row['unit_name'] ?? '')),
             (string) ($row['staff_name'] ?? ''),
             (string) (($row['campaign_name'] ?? '') ?: ($row['title'] ?? '')),
             (float) ($row['leads_count'] ?? 0),
@@ -2400,7 +2768,7 @@ function render_rekap_reports_table(array $rows): void
           <td><?= h((string) ($row['report_date'] ?? '-')) ?></td>
           <td><?= h(report_type_label((string) ($row['report_type'] ?? ''))) ?></td>
           <td><?= h((string) (($row['wilayah'] ?? '') ?: '-')) ?></td>
-          <td><?= h((string) (($row['unit_name'] ?? '') ?: '-')) ?></td>
+          <td><?= h(campus_canonical_label((string) (($row['unit_name'] ?? '') ?: '-'))) ?></td>
           <td><?= h((string) (($row['staff_name'] ?? '') ?: '-')) ?></td>
           <td><?= h((string) (($row['campaign_name'] ?? '') ?: ($row['title'] ?? '-'))) ?></td>
           <td><?= h(number_format((float) ($row['leads_count'] ?? 0), 0, ',', '.')) ?></td>
@@ -2460,7 +2828,7 @@ function export_rekap_csv(string $area, array $filters, string $type, array $rep
     } else {
         fputcsv($out, ['Tanggal', 'Jenis', 'Wilayah', 'Unit/Kampus', 'Staff', 'Judul/Campaign', 'Leads', 'Closing', 'Anggaran', 'Realisasi', 'Status']);
         foreach ($reports as $row) {
-            fputcsv($out, [(string) ($row['report_date'] ?? ''), report_type_label((string) ($row['report_type'] ?? '')), (string) ($row['wilayah'] ?? ''), (string) ($row['unit_name'] ?? ''), (string) ($row['staff_name'] ?? ''), (string) (($row['campaign_name'] ?? '') ?: ($row['title'] ?? '')), (float) ($row['leads_count'] ?? 0), (float) ($row['closing_count'] ?? 0), (float) ($row['budget_requested'] ?? 0), (float) ($row['realization_amount'] ?? 0), (string) ($row['status'] ?? '')]);
+            fputcsv($out, [(string) ($row['report_date'] ?? ''), report_type_label((string) ($row['report_type'] ?? '')), (string) ($row['wilayah'] ?? ''), campus_canonical_label((string) ($row['unit_name'] ?? '')), (string) ($row['staff_name'] ?? ''), (string) (($row['campaign_name'] ?? '') ?: ($row['title'] ?? '')), (float) ($row['leads_count'] ?? 0), (float) ($row['closing_count'] ?? 0), (float) ($row['budget_requested'] ?? 0), (float) ($row['realization_amount'] ?? 0), (string) ($row['status'] ?? '')]);
         }
     }
     fclose($out);
@@ -2502,6 +2870,7 @@ function export_ads_excel(string $area, array $filters, array $reports): void
         <thead>
           <tr>
             <th>Tanggal</th>
+            <th>Periode Iklan</th>
             <th>Regional</th>
             <th>Unit/Kampus</th>
             <th>Platform</th>
@@ -2517,12 +2886,12 @@ function export_ads_excel(string $area, array $filters, array $reports): void
         </thead>
         <tbody>
           <?php if (!$reports): ?>
-            <tr><td colspan="12">Belum ada laporan iklan pada filter ini.</td></tr>
+            <tr><td colspan="13">Belum ada laporan iklan pada filter ini.</td></tr>
           <?php endif; ?>
           <?php foreach ($groups as $regionalGroup): ?>
             <?php $regionalTotals = ads_group_total_cells($regionalGroup['totals']); ?>
             <tr class="regional">
-              <td colspan="5">Regional: <?= h((string) $regionalGroup['label']) ?> - <?= h(number_format((int) $regionalGroup['totals']['count'], 0, ',', '.')) ?> laporan</td>
+              <td colspan="6">Regional: <?= h((string) $regionalGroup['label']) ?> - <?= h(number_format((int) $regionalGroup['totals']['count'], 0, ',', '.')) ?> laporan</td>
               <td class="money"><?= h($regionalTotals['anggaran']) ?></td>
               <td class="money"><?= h($regionalTotals['realisasi']) ?></td>
               <td class="num"><?= h($regionalTotals['leads']) ?></td>
@@ -2533,7 +2902,7 @@ function export_ads_excel(string $area, array $filters, array $reports): void
             <?php foreach ($regionalGroup['campuses'] as $campusGroup): ?>
               <?php $campusTotals = ads_group_total_cells($campusGroup['totals']); ?>
               <tr class="campus">
-              <td colspan="5">Nama Kampus: <?= h((string) $campusGroup['label']) ?> - <?= h(number_format((int) $campusGroup['totals']['count'], 0, ',', '.')) ?> laporan</td>
+              <td colspan="6"><?= h((string) $campusGroup['label']) ?></td>
                 <td class="money"><?= h($campusTotals['anggaran']) ?></td>
                 <td class="money"><?= h($campusTotals['realisasi']) ?></td>
                 <td class="num"><?= h($campusTotals['leads']) ?></td>
@@ -2544,8 +2913,9 @@ function export_ads_excel(string $area, array $filters, array $reports): void
               <?php foreach ($campusGroup['rows'] as $row): ?>
                 <tr>
                   <td><?= h((string) ($row['report_date'] ?? '')) ?></td>
+                  <td><?= h((string) (($row['ad_period'] ?? '') ?: rsm_default_ad_period((string) ($row['report_date'] ?? '')))) ?></td>
                   <td><?= h((string) (($row['wilayah'] ?? '') ?: '-')) ?></td>
-                  <td><?= h((string) (($row['unit_name'] ?? '') ?: '-')) ?></td>
+                  <td><?= h(campus_canonical_label((string) (($row['unit_name'] ?? '') ?: '-'))) ?></td>
                   <td><?= h((string) (($row['platform'] ?? '') ?: '-')) ?></td>
                   <td><?= h((string) (($row['campaign_name'] ?? '') ?: ($row['title'] ?? '-'))) ?></td>
                   <td class="money"><?= h(money_idr((float) ($row['budget_requested'] ?? 0))) ?></td>
@@ -2597,7 +2967,7 @@ function render_daily_report_table(array $rows): void
         <tr>
           <td><?= h((string) ($row['report_date'] ?? '-')) ?></td>
           <td><?= h((string) ($row['staff_name'] ?? '-')) ?></td>
-          <td><?= h((string) ($row['unit_name'] ?? '-')) ?></td>
+          <td><?= h(campus_canonical_label((string) ($row['unit_name'] ?? '-'))) ?></td>
           <td><?= h((string) ($row['report_type'] ?? '-')) ?></td>
           <td><?= h((string) (($row['category'] ?? '') ?: ($row['title'] ?? '-'))) ?></td>
           <td><?= h((string) (($row['result_text'] ?? '') ?: '-')) ?></td>
@@ -2708,7 +3078,7 @@ function render_gamification_panel(array $gamification): void
           </span>
           <div class="leader-info">
             <strong><?= h((string) ($row['staff_label'] ?? '-')) ?></strong>
-            <span><?= h((string) (($row['wilayah'] ?? '') ?: '-')) ?> - <?= h((string) (($row['unit_name'] ?? '') ?: '-')) ?></span>
+            <span><?= h((string) (($row['wilayah'] ?? '') ?: '-')) ?> - <?= h(campus_canonical_label((string) (($row['unit_name'] ?? '') ?: '-'))) ?></span>
           </div>
           <div class="leader-metrics">
             <b><?= h(number_format((float) ($row['points'] ?? 0), 0, ',', '.')) ?> poin</b>
@@ -2732,7 +3102,7 @@ function render_activity_table(array $rows, string $role): void
     <div class="table-wrap"><table><thead><tr><th>Tanggal</th><th>Wilayah</th><th>Unit/Kampus</th><th>Staff</th><th>Jenis</th><th>Nama kegiatan</th><th>Leads</th><th>Status</th><th>Aksi</th></tr></thead><tbody>
       <?php if (!$rows): ?><tr><td colspan="9" class="empty-row">Belum ada data kegiatan marketing di database.</td></tr><?php endif; ?>
       <?php foreach ($rows as $row): ?>
-        <tr><td><?= h((string) $row['report_date']) ?></td><td><?= h((string) $row['wilayah']) ?></td><td><?= h((string) $row['unit_name']) ?></td><td><?= h((string) $row['staff_name']) ?></td><td><?= h((string) ($row['activity_kind'] ?: '-')) ?></td><td><?= h((string) $row['title']) ?></td><td><?= h((string) $row['leads_count']) ?></td><td><?= badge((string) $row['status']) ?></td><td><?= action_buttons($role, (int) $row['id'], (string) $row['status'], (string) ($row['report_type'] ?? 'marketing')) ?></td></tr>
+        <tr><td><?= h((string) $row['report_date']) ?></td><td><?= h((string) $row['wilayah']) ?></td><td><?= h(campus_canonical_label((string) $row['unit_name'])) ?></td><td><?= h((string) $row['staff_name']) ?></td><td><?= h((string) ($row['activity_kind'] ?: '-')) ?></td><td><?= h((string) $row['title']) ?></td><td><?= h((string) $row['leads_count']) ?></td><td><?= badge((string) $row['status']) ?></td><td><?= action_buttons($role, (int) $row['id'], (string) $row['status'], (string) ($row['report_type'] ?? 'marketing')) ?></td></tr>
       <?php endforeach; ?>
     </tbody></table></div>
     <?php
@@ -2742,12 +3112,12 @@ function render_ads_table(array $rows, string $role): void
 {
     $groups = ads_grouped_reports($rows);
     ?>
-    <div class="table-wrap"><table><thead><tr><th>Tanggal</th><th>Unit/Kampus</th><th>Platform</th><th>Campaign</th><th>Anggaran</th><th>Realisasi</th><th>Leads</th><th>Closing</th><th>CPL</th><th>Bukti</th><th>Status</th><th>Aksi</th></tr></thead><tbody>
-      <?php if (!$rows): ?><tr><td colspan="12" class="empty-row">Belum ada laporan iklan di database.</td></tr><?php endif; ?>
+    <div class="table-wrap ads-report-table"><table><thead><tr><th>Tanggal</th><th>Unit/Kampus</th><th>Anggaran</th><th>Realisasi</th><th>Leads</th><th>Closing</th><th>CPL</th><th>Bukti</th><th>Status</th><th>Aksi</th></tr></thead><tbody>
+      <?php if (!$rows): ?><tr><td colspan="10" class="empty-row">Belum ada laporan iklan di database.</td></tr><?php endif; ?>
       <?php foreach ($groups as $regionalGroup): ?>
         <?php $regionalTotals = ads_group_total_cells($regionalGroup['totals']); ?>
         <tr class="group-heading">
-          <td colspan="5">Regional: <?= h((string) $regionalGroup['label']) ?> <span><?= h(number_format((int) $regionalGroup['totals']['count'], 0, ',', '.')) ?> laporan</span></td>
+          <td colspan="2">Regional: <?= h((string) $regionalGroup['label']) ?> <span><?= h(number_format((int) $regionalGroup['totals']['count'], 0, ',', '.')) ?> laporan</span></td>
           <td><?= h($regionalTotals['anggaran']) ?></td>
           <td><?= h($regionalTotals['realisasi']) ?></td>
           <td><?= h($regionalTotals['leads']) ?></td>
@@ -2758,7 +3128,7 @@ function render_ads_table(array $rows, string $role): void
         <?php foreach ($regionalGroup['campuses'] as $campusGroup): ?>
           <?php $campusTotals = ads_group_total_cells($campusGroup['totals']); ?>
           <tr class="group-subheading">
-            <td colspan="5">Nama Kampus: <?= h((string) $campusGroup['label']) ?> <span><?= h(number_format((int) $campusGroup['totals']['count'], 0, ',', '.')) ?> laporan</span></td>
+            <td colspan="2"><?= h((string) $campusGroup['label']) ?></td>
             <td><?= h($campusTotals['anggaran']) ?></td>
             <td><?= h($campusTotals['realisasi']) ?></td>
             <td><?= h($campusTotals['leads']) ?></td>
@@ -2767,7 +3137,9 @@ function render_ads_table(array $rows, string $role): void
             <td colspan="3"></td>
           </tr>
           <?php foreach ($campusGroup['rows'] as $row): ?>
-            <tr><td><?= h((string) $row['report_date']) ?></td><td><?= h((string) (($row['unit_name'] ?? '') ?: '-')) ?></td><td><?= h((string) ($row['platform'] ?: '-')) ?></td><td><?= h((string) ($row['campaign_name'] ?: $row['title'])) ?></td><td><?= h(money_idr((float) $row['budget_requested'])) ?></td><td><?= h(money_idr((float) $row['realization_amount'])) ?></td><td><?= h((string) $row['leads_count']) ?></td><td><?= h((string) ($row['closing_count'] ?? 0)) ?></td><td><?= h(money_idr((float) $row['cpl'])) ?></td><td><?= attachment_badge((string) ($row['attachment_path'] ?? '')) ?></td><td><?= badge((string) $row['status']) ?></td><td><?= action_buttons($role, (int) $row['id'], (string) $row['status'], (string) ($row['report_type'] ?? 'ads')) ?></td></tr>
+            <?php $unitFullName = campus_canonical_label((string) (($row['unit_name'] ?? '') ?: '-')); ?>
+            <?php $adPeriod = (string) (($row['ad_period'] ?? '') ?: rsm_default_ad_period((string) ($row['report_date'] ?? ''))); ?>
+            <tr><td><?= h((string) $row['report_date']) ?><small class="ads-campaign-name"><?= h($adPeriod) ?></small></td><td><strong><?= h($unitFullName) ?></strong><small class="ads-campaign-name"><?= h((string) ($row['platform'] ?: '-')) ?> - <?= h((string) (($row['campaign_name'] ?: $row['title']) ?: '-')) ?></small></td><td><?= h(money_idr((float) $row['budget_requested'])) ?></td><td><?= h(money_idr((float) $row['realization_amount'])) ?></td><td><?= h((string) $row['leads_count']) ?></td><td><?= h((string) ($row['closing_count'] ?? 0)) ?></td><td><?= h(money_idr((float) $row['cpl'])) ?></td><td><?= attachment_badge((string) ($row['attachment_path'] ?? '')) ?></td><td><?= badge((string) $row['status']) ?></td><td><?= action_buttons($role, (int) $row['id'], (string) $row['status'], (string) ($row['report_type'] ?? 'ads'), (float) ($row['budget_requested'] ?? 0)) ?></td></tr>
           <?php endforeach; ?>
         <?php endforeach; ?>
       <?php endforeach; ?>
@@ -2780,9 +3152,12 @@ function ads_grouped_reports(array $rows): array
     $groups = [];
     foreach ($rows as $row) {
         $regional = (string) (($row['wilayah'] ?? '') ?: 'Regional belum diatur');
-        $campus = (string) (($row['unit_name'] ?? '') ?: 'Kampus belum diatur');
+        $campus = campus_canonical_label((string) (($row['unit_name'] ?? '') ?: 'Kampus belum diatur'));
         $regionalKey = strtolower($regional);
-        $campusKey = strtolower($campus);
+        $campusKey = campus_alias_key($campus);
+        if ($campusKey === '') {
+            $campusKey = strtolower($campus);
+        }
         if (!isset($groups[$regionalKey])) {
             $groups[$regionalKey] = ['label' => $regional, 'totals' => ads_group_totals(), 'campuses' => []];
         }
@@ -2843,7 +3218,7 @@ function render_monthly_targets_table(array $rows): void
           <td><?= h((string) ($row['target_month'] ?? '-')) ?></td>
           <td><?= h(ucfirst((string) ($row['scope_type'] ?? 'regional'))) ?></td>
           <td><?= h((string) (($row['wilayah'] ?? '') ?: '-')) ?></td>
-          <td><?= h((string) (($row['unit_name'] ?? '') ?: '-')) ?></td>
+          <td><?= h(campus_canonical_label((string) (($row['unit_name'] ?? '') ?: '-'))) ?></td>
           <td><?= h((string) (($row['staff_name'] ?? '') ?: '-')) ?></td>
           <td><?= h(number_format((int) ($row['target_leads'] ?? 0), 0, ',', '.')) ?></td>
           <td><?= h(number_format((int) ($row['target_follow_up'] ?? 0), 0, ',', '.')) ?></td>
@@ -2857,6 +3232,75 @@ function render_monthly_targets_table(array $rows): void
     <?php
 }
 
+function render_campus_master_table(array $rows, string $area): void
+{
+    ?>
+    <div class="table-wrap campus-master-table"><table><thead><tr><th>Regional</th><th>Nama Resmi</th><th>Nama Pendek</th><th>Kode</th><th>PIC</th><th>Kontak</th><th>Status</th><th>Alias & Aksi</th></tr></thead><tbody>
+      <?php if (!$rows): ?><tr><td colspan="8" class="empty-row">Belum ada master kampus.</td></tr><?php endif; ?>
+      <?php foreach ($rows as $row): ?>
+        <?php
+          $id = (int) ($row['id'] ?? 0);
+          $picName = (string) (($row['resolved_pic_name'] ?? '') ?: ($row['pic_staff_name'] ?? ''));
+          $picNik = (string) (($row['resolved_pic_nik'] ?? '') ?: ($row['pic_nik'] ?? ''));
+          $picPhone = (string) (($row['resolved_pic_phone'] ?? '') ?: ($row['pic_phone'] ?? ''));
+        ?>
+        <tr>
+          <td><strong><?= h((string) ($row['regional'] ?? '-')) ?></strong></td>
+          <td><strong><?= h((string) ($row['official_name'] ?? '-')) ?></strong><small><?= h((string) (($row['source_name'] ?? '') ?: 'Manual RSM')) ?></small></td>
+          <td><strong><?= h((string) ($row['display_name'] ?? '-')) ?></strong></td>
+          <td><?= h((string) (($row['campus_code'] ?? '') ?: '-')) ?></td>
+          <td><strong><?= h($picName !== '' ? $picName : '-') ?></strong><small><?= h($picNik !== '' ? $picNik : '-') ?></small></td>
+          <td><?= h($picPhone !== '' ? $picPhone : '-') ?></td>
+          <td><?= badge(((int) ($row['is_active'] ?? 1) === 1 ? (string) ($row['partner_status'] ?? 'Aktif') : 'Nonaktif')) ?></td>
+          <td>
+            <div class="campus-master-actions">
+              <small><?= h((string) (($row['aliases'] ?? '') ?: '-')) ?></small>
+              <button class="text-btn" type="button" onclick="document.getElementById('edit-campus-<?= h((string) $id) ?>').classList.toggle('is-open')">Alias & edit</button>
+            </div>
+          </td>
+        </tr>
+        <tr id="edit-campus-<?= h((string) $id) ?>" class="campus-master-edit-row">
+          <td colspan="8">
+            <div class="campus-master-edit-panel">
+              <div class="panel-head compact">
+                <div>
+                  <h3><?= h((string) ($row['display_name'] ?? $row['official_name'] ?? 'Master Kampus')) ?></h3>
+                  <span>Edit alias, PIC, status kerja sama, dan catatan master kampus</span>
+                </div>
+              </div>
+              <form class="campus-master-edit" method="post">
+                <?= rsm_csrf_field() ?>
+                <input type="hidden" name="action" value="save_master_campus">
+                <input type="hidden" name="campus_master_id" value="<?= h((string) $id) ?>">
+                <label><span>Regional</span><select name="regional" required><?php foreach (rsm_area_regionals($area) as $regionalOption): ?><option value="<?= h($regionalOption) ?>"<?= selected_attr((string) ($row['regional'] ?? ''), $regionalOption) ?>><?= h($regionalOption) ?></option><?php endforeach; ?></select></label>
+                <label><span>Nama resmi</span><input name="official_name" value="<?= h((string) ($row['official_name'] ?? '')) ?>" required></label>
+                <label><span>Nama pendek</span><input name="display_name" value="<?= h((string) ($row['display_name'] ?? '')) ?>" required></label>
+                <label><span>Kode</span><input name="campus_code" value="<?= h((string) ($row['campus_code'] ?? '')) ?>"></label>
+                <label><span>Staff PIC</span><input name="pic_staff_name" value="<?= h((string) ($row['pic_staff_name'] ?? '')) ?>"></label>
+                <label><span>NIK PIC</span><input name="pic_nik" value="<?= h((string) ($row['pic_nik'] ?? '')) ?>"></label>
+                <label><span>Kontak PIC</span><input name="pic_phone" value="<?= h((string) ($row['pic_phone'] ?? '')) ?>"></label>
+                <label><span>Status kerja sama</span><select name="partner_status"><?php foreach (['Aktif', 'Prospek', 'Review', 'Nonaktif'] as $statusOption): ?><option<?= selected_attr((string) ($row['partner_status'] ?? 'Aktif'), $statusOption) ?>><?= h($statusOption) ?></option><?php endforeach; ?></select></label>
+                <label><span>Aktif sistem</span><select name="is_active"><option value="1"<?= selected_attr((string) ((int) ($row['is_active'] ?? 1)), '1') ?>>Aktif</option><option value="0"<?= selected_attr((string) ((int) ($row['is_active'] ?? 1)), '0') ?>>Nonaktif</option></select></label>
+                <label><span>Sumber data</span><input name="source_name" value="<?= h((string) ($row['source_name'] ?? '')) ?>"></label>
+                <label><span>URL sumber</span><input name="source_url" value="<?= h((string) ($row['source_url'] ?? '')) ?>"></label>
+                <label class="form-full"><span>Alias</span><textarea name="aliases" rows="3"><?= h((string) ($row['aliases'] ?? '')) ?></textarea></label>
+                <label class="form-full"><span>Catatan</span><textarea name="notes" rows="3"><?= h((string) ($row['notes'] ?? '')) ?></textarea></label>
+                <div class="form-actions form-full"><button class="primary-btn">Simpan Perubahan</button></div>
+              </form>
+              <form method="post" class="inline-action" onsubmit="return confirm('Hapus master kampus ini?')">
+                <?= rsm_csrf_field() ?>
+                <input type="hidden" name="action" value="delete_master_campus">
+                <input type="hidden" name="campus_master_id" value="<?= h((string) $id) ?>">
+                <button class="text-btn danger">Hapus Kampus</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+      <?php endforeach; ?>
+    </tbody></table></div>
+    <?php
+}
+
 function render_ad_leads_table(array $rows, int $reportId): void
 {
     ?>
@@ -2864,7 +3308,7 @@ function render_ad_leads_table(array $rows, int $reportId): void
       <?= rsm_csrf_field() ?>
       <input type="hidden" name="action" value="update_ad_leads">
       <input type="hidden" name="report_id" value="<?= h((string) $reportId) ?>">
-      <div class="table-wrap"><table><thead><tr><th>Nama Lead</th><th>No. HP/WA</th><th>Email</th><th>Kampus</th><th>Jurusan</th><th>Kota Asal</th><th>Follow Up</th><th>Status Closing</th><th>Catatan</th></tr></thead><tbody>
+      <div class="table-wrap ad-leads-table"><table><thead><tr><th>Nama Lead</th><th>No. HP/WA</th><th>Email</th><th>Kampus</th><th>Jurusan</th><th>Kota Asal</th><th>Follow Up</th><th>Status Closing</th><th>Catatan</th></tr></thead><tbody>
         <?php if (!$rows): ?><tr><td colspan="9" class="empty-row">Belum ada data hasil iklan yang diupload untuk laporan ini.</td></tr><?php endif; ?>
         <?php foreach ($rows as $row): ?>
           <?php $leadId = (int) $row['id']; ?>
@@ -2902,7 +3346,240 @@ function closing_status_select(int $leadId, string $current): string
 function display_or_empty(mixed $value): string
 {
     $value = trim((string) $value);
-    return $value !== '' ? $value : 'belum diisi';
+    return $value !== '' ? $value : '-';
+}
+
+function campus_short_label(string $name): string
+{
+    $name = trim($name);
+    if ($name === '') {
+        return '-';
+    }
+    $upper = mb_strtoupper($name);
+    $codeMap = [
+        'MSJ' => 'UMSJ',
+        'IMSI' => 'INDOCAKTI',
+        'KKUK' => 'UKK',
+        'INAAL' => 'UINAZ',
+        'UAAL' => 'UINAZ',
+        'MHAAKB' => 'IMA',
+        'BALYSL' => 'STBA LIA',
+    ];
+    if (isset($codeMap[$upper])) {
+        return $codeMap[$upper];
+    }
+    if (preg_match('/\[\s*([A-Z0-9 .-]{2,18})\s*\]/u', $name, $match)) {
+        $code = mb_strtoupper(trim($match[1]));
+        return $codeMap[$code] ?? $code;
+    }
+    if (preg_match_all('/\(\s*([A-Z0-9][A-Z0-9 .-]{1,20})\s*\)/u', $name, $matches)) {
+        $candidate = mb_strtoupper(trim((string) end($matches[1])));
+        if ($candidate !== '' && mb_strlen($candidate) <= 18) {
+            return $codeMap[$candidate] ?? $candidate;
+        }
+    }
+
+    $manual = [
+        'Universitas Taman Siswa' => 'Taman Siswa',
+        'Universitas Teknologi Sulawesi' => 'UTS',
+        'Universitas Ubudiyah Indonesia' => 'UUI',
+        'Universitas IVET' => 'IVET',
+        'IVET Semarang' => 'IVET',
+        'UM Surabaya' => 'UMS',
+        'Universitas Muhammadiyah Surabaya' => 'UMS',
+        'UWK Surabaya' => 'UWKS',
+        'Universitas Wijaya Kusuma Surabaya' => 'UWKS',
+        'Universitas Widya Kartika' => 'UWIKA',
+        'UIN Al-Azhaar Lubuklinggau' => 'UINAZ',
+        'UIN Al Azhaar Lubuklinggau' => 'UINAZ',
+        'STIESIA Surabaya' => 'STIESIA',
+        'Sekolah Tinggi Ilmu Ekonomi Indonesia' => 'STIESIA',
+        'Sekolah Tinggi Ilmu Ekonomi Artha Bodhi Iswara' => 'STIE ABI',
+        'Institut Keguruan dan Ilmu Pendidikan Widya Darma Surabaya' => 'IKIP WD',
+    ];
+    $normalized = (string) preg_replace('/\s+/u', ' ', $name);
+    foreach ($manual as $needle => $short) {
+        if (mb_stripos($normalized, $needle) !== false) {
+            return $short;
+        }
+    }
+    if (mb_strlen($normalized) <= 20) {
+        return $normalized;
+    }
+
+    $words = preg_split('/\s+/u', (string) preg_replace('/[^A-Za-z0-9 ]/u', ' ', $normalized)) ?: [];
+    $skip = ['universitas', 'institut', 'sekolah', 'tinggi', 'ilmu', 'ekonomi', 'dan', 'the', 'of'];
+    $letters = [];
+    foreach ($words as $word) {
+        $clean = trim($word);
+        if ($clean === '' || in_array(mb_strtolower($clean), $skip, true)) {
+            continue;
+        }
+        $letters[] = mb_strtoupper(mb_substr($clean, 0, 1));
+    }
+    $acronym = implode('', array_slice($letters, 0, 8));
+    return $acronym !== '' ? $acronym : mb_substr($normalized, 0, 20);
+}
+
+function campus_alias_key(string $name): string
+{
+    $label = mb_strtolower(trim($name));
+    $label = str_replace(['-', '_'], ' ', $label);
+    $label = preg_replace('/\s+/u', ' ', $label) ?? $label;
+
+    $aliasGroups = [
+        'uinaz' => ['universitas islam nusantara al azhaar lubuklinggau', 'universitas islam nusantara al-azhaar lubuklinggau', 'uin al azhaar lubuklinggau', 'uin al-azhaar lubuklinggau', 'inaal', 'uaal', 'uinaz'],
+        'ivet' => ['universitas ivet', 'ivet semarang', 'ivet'],
+        'uwks' => ['universitas wijaya kusuma surabaya', 'uwk surabaya', 'uwks'],
+        'uwika' => ['universitas widya kartika', 'uwika', 'uwk'],
+        'uhamzah' => ['uhamzah', 'universitas hamzanwadi', 'universitas hamzah'],
+    ];
+    foreach ($aliasGroups as $key => $aliases) {
+        foreach ($aliases as $alias) {
+            if (str_contains($label, $alias)) {
+                return $key;
+            }
+        }
+    }
+
+    $label = preg_replace('/\[[^\]]+\]|\([^\)]+\)/u', ' ', $label) ?? $label;
+    $label = str_replace(['universitas', 'institut', 'sekolah tinggi ilmu ekonomi', 'sekolah tinggi', 'surabaya'], ' ', $label);
+    return preg_replace('/[^a-z0-9]+/u', '', $label) ?? '';
+}
+
+function campus_canonical_label(string $name): string
+{
+    $label = [
+        'uinaz' => 'Universitas Islam Nusantara Al-Azhaar Lubuklinggau',
+        'ivet' => 'Universitas IVET',
+        'uwks' => 'Universitas Wijaya Kusuma Surabaya',
+        'uwika' => 'Universitas Widya Kartika',
+        'uhamzah' => 'UHAMZAH',
+    ][campus_alias_key($name)] ?? $name;
+
+    return campus_plain_label($label);
+}
+
+function campus_plain_label(string $name): string
+{
+    $name = preg_replace('/\s*[\(\[].*?[\)\]]\s*/', ' ', $name) ?? $name;
+    $name = preg_replace('/\s+/', ' ', trim($name)) ?? trim($name);
+
+    return $name !== '' ? $name : '-';
+}
+
+function render_social_content_forms(array $accounts, array $references, ?array $authUser): void
+{
+    $defaultRegional = (string) (($authUser['regional'] ?? '') ?: '');
+    $defaultCampus = campus_canonical_label((string) (($authUser['campus_name'] ?? '') ?: ''));
+    $role = (string) ($authUser['role'] ?? '');
+    $accountByCampus = [];
+    foreach ($accounts as $account) {
+        $accountCampus = campus_canonical_label((string) ($account['unit_name'] ?? ''));
+        if ($accountCampus !== '' && !isset($accountByCampus[$accountCampus])) {
+            $accountByCampus[$accountCampus] = $account;
+        }
+    }
+    ?>
+    <section class="dashboard-grid social-content-forms">
+      <article class="panel">
+        <div class="panel-head"><h2>Akun Instagram Kampus</h2><span>Manual dulu, siap disambungkan API Meta</span></div>
+        <form class="data-form social-form" method="post">
+          <?= rsm_csrf_field() ?>
+          <input type="hidden" name="action" value="save_social_account">
+          <label><span>Wilayah</span><select name="wilayah" class="js-campus-regional-select" required>
+            <option value="">Pilih wilayah</option>
+            <?php foreach ($references['regionals'] as $regional): ?>
+              <option value="<?= h((string) $regional) ?>"<?= selected_attr($defaultRegional, (string) $regional) ?>><?= h((string) $regional) ?></option>
+            <?php endforeach; ?>
+          </select></label>
+          <label><span>Unit/Kampus</span><select name="unit_name" class="js-social-campus-select js-campus-filter-select" required>
+            <option value="">Pilih kampus</option>
+            <?php foreach ($references['campuses'] as $campus): $label = (string) ($campus['label'] ?? ''); $savedAccount = $accountByCampus[campus_canonical_label($label)] ?? []; ?>
+              <option value="<?= h($label) ?>"
+                data-regional="<?= h((string) ($campus['regional'] ?? '')) ?>"
+                data-pic="<?= h((string) ($campus['pic_name'] ?? '')) ?>"
+                data-phone="<?= h((string) ($campus['pic_phone'] ?? '')) ?>"
+                data-instagram="<?= h((string) ($savedAccount['instagram_username'] ?? '')) ?>"
+                data-business="<?= h((string) ($savedAccount['instagram_business_id'] ?? '')) ?>"
+                data-connection="<?= h((string) ($savedAccount['connection_status'] ?? '')) ?>"
+                data-notes="<?= h((string) ($savedAccount['notes'] ?? '')) ?>"
+                <?= selected_attr($defaultCampus, $label) ?>><?= h($label) ?></option>
+            <?php endforeach; ?>
+          </select></label>
+          <label><span>Username Instagram</span><input name="instagram_username" class="js-social-instagram" placeholder="contoh: kampusregionalb" required></label>
+          <label><span>Business ID</span><input name="instagram_business_id" class="js-social-business" placeholder="Opsional nanti untuk API"></label>
+          <label><span>PIC</span><input name="pic_name" class="js-social-pic-name" value="<?= h((string) ($authUser['name'] ?? '')) ?>" readonly></label>
+          <label><span>No. PIC</span><input name="pic_phone" class="js-social-pic-phone" placeholder="Belum ada nomor di database staff" readonly></label>
+          <label><span>Status koneksi</span><select name="connection_status" class="js-social-connection"><option>Manual</option><option>Siap API</option><option>Token expired</option><option>Nonaktif</option></select></label>
+          <label class="wide"><span>Catatan</span><input name="notes" class="js-social-notes" placeholder="Opsional"></label>
+          <div class="form-actions form-full"><button class="primary-btn">Simpan Akun</button></div>
+        </form>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h2>Catat Posting Hari Ini</h2><span>Feed +10, reels +15, story +5, keyword PMB +5</span></div>
+        <form class="data-form social-form" method="post">
+          <?= rsm_csrf_field() ?>
+          <input type="hidden" name="action" value="create_social_post">
+          <label class="wide"><span>Akun kampus</span><select name="account_id" class="js-post-account-select" required>
+            <option value="">Pilih akun</option>
+            <?php foreach ($accounts as $account): ?>
+              <option value="<?= h((string) ($account['id'] ?? '')) ?>" data-instagram="<?= h((string) ($account['instagram_username'] ?? '')) ?>" data-connect-url="instagram-connect.php?account_id=<?= h((string) ($account['id'] ?? '')) ?>&area=<?= h(rawurlencode('Regional B')) ?>"><?= h(campus_canonical_label((string) ($account['unit_name'] ?? '-'))) ?></option>
+            <?php endforeach; ?>
+          </select></label>
+          <label><span>Tanggal posting</span><input type="date" name="post_date" value="<?= h(date('Y-m-d')) ?>"></label>
+          <label><span>Status posting</span><select name="media_type" class="js-post-type-select"><option value="no_post">Belum ada postingan</option><option value="feed">Feed</option><option value="reels">Reels</option></select></label>
+          <label class="js-post-detail-field" hidden><span>Jam posting</span><input type="time" name="post_time" value="<?= h(date('H:i')) ?>" disabled></label>
+          <label class="js-post-detail-field" hidden><span>Link posting</span><input name="post_url" placeholder="Opsional" disabled></label>
+          <label class="js-post-detail-field" hidden><span>Reach</span><input name="reach_count" inputmode="numeric" value="0" disabled></label>
+          <label class="js-post-detail-field" hidden><span>Like</span><input name="like_count" inputmode="numeric" value="0" disabled></label>
+          <label class="js-post-detail-field" hidden><span>Komentar</span><input name="comment_count" inputmode="numeric" value="0" disabled></label>
+          <label class="wide js-post-detail-field" hidden><span>Caption</span><textarea name="caption" rows="3" placeholder="Keyword PMB, kelas karyawan, RPL, kuliah, pendaftaran akan menambah poin." disabled></textarea></label>
+          <label class="wide js-no-post-note"><span>Catatan</span><textarea name="no_post_notes" rows="3" placeholder="Contoh: belum ada konten baru hari ini, menunggu materi dari kampus."></textarea></label>
+          <div class="form-actions form-full split-actions">
+            <span class="inline-actions">
+              <a class="secondary-btn js-post-instagram-link is-disabled" href="#" target="_blank" rel="noopener" aria-disabled="true">Cek Instagram</a>
+              <a class="secondary-btn js-post-connect-link is-disabled" href="#" aria-disabled="true">Hubungkan API</a>
+            </span>
+            <button class="primary-btn"<?= $accounts ? '' : ' disabled' ?>>Catat Posting</button>
+          </div>
+        </form>
+        <?php if (!$accounts): ?><p class="muted">Tambahkan akun Instagram kampus dulu sebelum mencatat posting.</p><?php endif; ?>
+      </article>
+    </section>
+    <?php
+}
+
+function render_social_regional_table(array $rows): void
+{
+    ?>
+    <div class="table-wrap"><table><thead><tr><th>Regional</th><th>Feed</th><th>Reels</th><th>Story</th><th>Post</th><th>Poin</th></tr></thead><tbody>
+      <?php if (!$rows): ?><tr><td colspan="6" class="empty-row">Belum ada posting pada periode ini.</td></tr><?php endif; ?>
+      <?php foreach ($rows as $row): ?>
+        <tr><td><strong><?= h((string) ($row['wilayah'] ?? '-')) ?></strong></td><td><?= h((string) ($row['feed'] ?? 0)) ?></td><td><?= h((string) ($row['reels'] ?? 0)) ?></td><td><?= h((string) ($row['story'] ?? 0)) ?></td><td><?= h((string) ($row['posts'] ?? 0)) ?></td><td><strong><?= h((string) ($row['score'] ?? 0)) ?></strong></td></tr>
+      <?php endforeach; ?>
+    </tbody></table></div>
+    <?php
+}
+
+function render_social_posts_table(array $rows): void
+{
+    ?>
+    <div class="table-wrap social-post-table"><table><thead><tr><th>Tanggal</th><th>Kampus</th><th>Akun</th><th>Jenis</th><th>Caption</th><th>Poin</th></tr></thead><tbody>
+      <?php if (!$rows): ?><tr><td colspan="6" class="empty-row">Belum ada aktivitas konten.</td></tr><?php endif; ?>
+      <?php foreach ($rows as $row): ?>
+        <tr>
+          <td><?= h((string) ($row['post_date'] ?? '-')) ?><small><?= h(substr((string) ($row['post_time'] ?? ''), 0, 5) ?: '-') ?></small></td>
+          <td><strong><?= h(campus_canonical_label((string) ($row['unit_name'] ?? '-'))) ?></strong><small><?= h((string) ($row['wilayah'] ?? '-')) ?></small></td>
+          <td>@<?= h((string) ($row['instagram_username'] ?? '-')) ?></td>
+          <?php $typeLabel = ['no_post' => 'Belum ada postingan', 'feed' => 'Feed', 'reels' => 'Reels', 'story' => 'Story'][(string) ($row['media_type'] ?? '')] ?? ucfirst((string) ($row['media_type'] ?? '-')); ?>
+          <td><?= h($typeLabel) ?></td>
+          <td><?= h((string) (($row['caption'] ?? '') ?: '-')) ?></td>
+          <td><strong><?= h((string) ($row['score'] ?? 0)) ?></strong></td>
+        </tr>
+      <?php endforeach; ?>
+    </tbody></table></div>
+    <?php
 }
 
 function render_other_table(array $rows, string $role): void
@@ -2935,7 +3612,7 @@ function render_users_table(array $rows, array $references = []): void
         if ($regionalCompare !== 0) {
             return $regionalCompare;
         }
-        $roleOrder = ['senior' => 0, 'mentor' => 1, 'koordinator' => 2, 'staff' => 3];
+        $roleOrder = ['super_user' => 0, 'executive_director' => 1, 'director' => 2, 'senior' => 3, 'mentor' => 4, 'koordinator' => 5, 'staff' => 6];
         $roleCompare = ($roleOrder[(string) ($a['role'] ?? '')] ?? 9) <=> ($roleOrder[(string) ($b['role'] ?? '')] ?? 9);
         if ($roleCompare !== 0) {
             return $roleCompare;
@@ -3000,7 +3677,7 @@ function render_users_table(array $rows, array $references = []): void
               <input name="nik" value="<?= h((string) ($row['nik'] ?? '')) ?>" placeholder="NIK" title="NIK">
               <input name="username" value="<?= h((string) $row['username']) ?>" required title="Username">
               <select name="user_role" title="Role">
-                <?php foreach (['staff' => 'Staff Unit', 'koordinator' => 'Koordinator Wilayah', 'mentor' => 'Mentor', 'senior' => 'Senior Manager'] as $key => $label): ?>
+                <?php foreach (['staff' => 'Staff Unit', 'koordinator' => 'Koordinator Wilayah', 'mentor' => 'Mentor', 'senior' => 'Senior Manager', 'director' => 'Director', 'executive_director' => 'Executive Director', 'super_user' => 'Super User'] as $key => $label): ?>
                   <option value="<?= h($key) ?>" <?= (string) $row['role'] === $key ? 'selected' : '' ?>><?= h($label) ?></option>
                 <?php endforeach; ?>
               </select>
@@ -3040,15 +3717,24 @@ function render_users_table(array $rows, array $references = []): void
     <?php
 }
 
-function action_buttons(string $role, int $id, string $status, string $reportType = ''): string
+function action_buttons(string $role, int $id, string $status, string $reportType = '', float $budgetRequested = 0.0): string
 {
     $buttons = '<div class="report-actions">';
-    $buttons .= '<a class="icon-action mini" href="' . h(url_for('detail', $role) . '&id=' . $id) . '" title="Detail" data-tooltip="Detail" aria-label="Detail"><span aria-hidden="true">&#128065;</span></a>';
+    $buttons .= '<a class="icon-action mini" href="' . h(url_for('detail', $role) . '&id=' . $id) . '" title="Detail" data-tooltip="Detail" aria-label="Detail">' . svg_icon('eye') . '</a>';
     if (can_edit_report($role, $status, $reportType)) {
-        $buttons .= '<a class="icon-action mini" href="' . h(url_for('edit', $role) . '&id=' . $id) . '" title="Edit" data-tooltip="Edit" aria-label="Edit"><span aria-hidden="true">&#9998;</span></a>';
+        $buttons .= '<a class="icon-action mini" href="' . h(url_for('edit', $role) . '&id=' . $id) . '" title="Edit" data-tooltip="Edit" aria-label="Edit">' . svg_icon('edit') . '</a>';
     }
     if (can_delete_report($role, $status, $reportType)) {
         $buttons .= delete_form($id);
+    }
+    if ($reportType === 'ads') {
+        if (in_array($role, ['super_user', 'executive_director', 'director', 'senior'], true)) {
+            $statusKey = strtolower(trim($status));
+            if (in_array($statusKey, ['pengajuan', 'revisi'], true)) {
+                $buttons .= ads_approval_form($id, $budgetRequested) . status_form($id, 'Ditolak', 'Tolak', false, 'danger') . status_form($id, 'Revisi', 'Revisi', true);
+            }
+        }
+        return $buttons . '</div>';
     }
     if (can_action($role, 'verifikasi')) {
         $buttons .= status_form($id, 'Diverifikasi', 'Verifikasi') . status_form($id, 'Revisi', 'Revisi', true);
@@ -3059,9 +3745,25 @@ function action_buttons(string $role, int $id, string $status, string $reportTyp
     return $buttons . '</div>';
 }
 
+function ads_approval_form(int $id, float $budgetRequested): string
+{
+    $approvedValue = $budgetRequested > 0 ? number_format($budgetRequested, 0, '', '') : '';
+    return '<form method="post" class="inline-action">'
+        . rsm_csrf_field()
+        . '<input type="hidden" name="action" value="status_update">'
+        . '<input type="hidden" name="report_id" value="' . h((string) $id) . '">'
+        . '<input type="hidden" name="new_status" value="Disetujui">'
+        . '<input class="revision-note" name="budget_approved" inputmode="numeric" value="' . h($approvedValue) . '" placeholder="Rp disetujui" title="Anggaran disetujui">'
+        . '<button class="icon-action mini success" title="Setujui" data-tooltip="Setujui" aria-label="Setujui">' . svg_icon('check') . '</button>'
+        . '</form>';
+}
+
 function can_edit_report(string $role, string $status, string $reportType = ''): bool
 {
-    if ($role === 'koordinator' && $reportType === 'ads') {
+    if ($reportType === 'ads' && in_array($role, ['super_user', 'executive_director', 'director', 'senior', 'koordinator'], true)) {
+        return true;
+    }
+    if ($reportType === 'ads' && $role === 'staff' && in_array(strtolower($status), ['disetujui', 'transfer-/-invoice', 'transfer / invoice', 'berjalan', 'dilaporkan-unit', 'dilaporkan unit', 'revisi'], true)) {
         return true;
     }
     return can_action($role, 'edit-draft') && in_array(strtolower($status), ['draft', 'revisi'], true);
@@ -3072,7 +3774,7 @@ function can_delete_report(string $role, string $status, string $reportType = ''
     if ($role === 'koordinator' && $reportType === 'ads') {
         return true;
     }
-    return in_array($role, ['senior', 'mentor'], true) || can_edit_report($role, $status, $reportType);
+    return in_array($role, ['super_user', 'executive_director', 'director', 'senior'], true) || can_edit_report($role, $status, $reportType);
 }
 
 function delete_form(int $id): string
@@ -3081,7 +3783,7 @@ function delete_form(int $id): string
         . rsm_csrf_field()
         . '<input type="hidden" name="action" value="delete_report">'
         . '<input type="hidden" name="report_id" value="' . h((string) $id) . '">'
-        . '<button class="icon-action mini danger" title="Hapus" data-tooltip="Hapus" aria-label="Hapus"><span aria-hidden="true">&#128465;</span></button>'
+        . '<button class="icon-action mini danger" title="Hapus" data-tooltip="Hapus" aria-label="Hapus">' . svg_icon('trash') . '</button>'
         . '</form>';
 }
 
@@ -3102,7 +3804,7 @@ function detail_fields(array $report): array
         'Jenis Laporan' => (string) ($report['report_type'] ?? ''),
         'Tanggal' => (string) ($report['report_date'] ?? ''),
         'Wilayah' => (string) ($report['wilayah'] ?? ''),
-        'Unit/Kampus' => (string) ($report['unit_name'] ?? ''),
+        'Unit/Kampus' => campus_canonical_label((string) ($report['unit_name'] ?? '')),
         'Nama Staff' => (string) ($report['staff_name'] ?? ''),
         'Status' => (string) ($report['status'] ?? ''),
         'Jenis/Kategori' => (string) (($report['activity_kind'] ?? '') ?: ($report['category'] ?? '') ?: ($report['platform'] ?? '')),
@@ -3112,6 +3814,7 @@ function detail_fields(array $report): array
         'Jumlah Leads' => (string) ($report['leads_count'] ?? '0'),
         'Jumlah Closing' => (string) ($report['closing_count'] ?? '0'),
         'Platform Iklan' => (string) ($report['platform'] ?? ''),
+        'Periode Iklan' => (string) (($report['ad_period'] ?? '') ?: rsm_default_ad_period((string) ($report['report_date'] ?? ''))),
         'Campaign' => (string) ($report['campaign_name'] ?? ''),
         'Tujuan Iklan' => (string) ($report['ad_goal'] ?? ''),
         'Anggaran Diajukan' => money_idr((float) ($report['budget_requested'] ?? 0)),
@@ -3131,29 +3834,49 @@ function detail_fields(array $report): array
 function status_form(int $id, string $status, string $label, bool $needsNote = false, string $tone = ''): string
 {
     $note = $needsNote ? '<input class="revision-note" name="revision_note" placeholder="Catatan revisi" required>' : '';
+    $formClass = $needsNote ? 'inline-action note-action' : 'inline-action';
     $icons = [
-        'Diverifikasi' => '&#10003;',
-        'Disetujui' => '&#10003;',
-        'Ditolak' => '&#10005;',
-        'Revisi' => '&#8635;',
+        'Diverifikasi' => 'check',
+        'Disetujui' => 'check',
+        'Ditolak' => 'x',
+        'Revisi' => 'rotate',
     ];
-    $icon = $icons[$status] ?? '&#8226;';
-    return '<form method="post" class="inline-action">'
+    $icon = svg_icon($icons[$status] ?? 'dot');
+    return '<form method="post" class="' . $formClass . '">'
         . rsm_csrf_field()
         . '<input type="hidden" name="action" value="status_update">'
         . '<input type="hidden" name="report_id" value="' . h((string) $id) . '">'
         . '<input type="hidden" name="new_status" value="' . h($status) . '">'
         . $note
-        . '<button class="icon-action mini ' . h($tone ?: ($needsNote ? 'warning' : 'success')) . '" title="' . h($label) . '" data-tooltip="' . h($label) . '" aria-label="' . h($label) . '"><span aria-hidden="true">' . $icon . '</span></button>'
+        . '<button class="icon-action mini ' . h($tone ?: ($needsNote ? 'warning' : 'success')) . '" title="' . h($label) . '" data-tooltip="' . h($label) . '" aria-label="' . h($label) . '">' . $icon . '</button>'
         . '</form>';
+}
+
+function svg_icon(string $name): string
+{
+    $paths = [
+        'eye' => '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+        'edit' => '<path d="M12 20h9"/><path d="m16.5 3.5 4 4L7 21l-4 1 1-4 12.5-14.5Z"/>',
+        'check' => '<path d="M20 6 9 17l-5-5"/>',
+        'x' => '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+        'rotate' => '<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/>',
+        'trash' => '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/>',
+        'dot' => '<circle cx="12" cy="12" r="2"/>',
+    ];
+    $path = $paths[$name] ?? $paths['dot'];
+
+    return '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' . $path . '</svg>';
 }
 
 function role_points(string $role): array
 {
     return [
+        'super_user' => ['Akses penuh seluruh sistem', 'Bisa masuk sebagai semua user', 'Mengelola user, target, kampus, dan approval', 'Melihat semua laporan dan export', 'Dipakai untuk pengembangan dan kontrol data'],
+        'executive_director' => ['Melihat semua wilayah, unit, dan staff', 'Menyetujui atau menolak laporan', 'Mengatur target pencapaian staff', 'Export semua laporan', 'Tidak melihat menu Kelola User'],
+        'director' => ['Melihat semua wilayah, unit, dan staff', 'Menyetujui atau menolak laporan', 'Mengatur target pencapaian staff', 'Export semua laporan', 'Tidak melihat menu Kelola User'],
         'senior' => ['Melihat semua wilayah, unit, dan staff', 'Menyetujui atau menolak laporan', 'Melihat seluruh anggaran iklan', 'Export semua laporan', 'Wajib memberi catatan jika revisi'],
-        'mentor' => ['Melihat semua wilayah, unit, dan staff', 'Mengatur target pencapaian staff', 'Menyetujui atau menolak laporan', 'Tidak melihat menu Kelola User', 'Wajib memberi catatan jika revisi'],
-        'koordinator' => ['Melihat data wilayahnya saja', 'Memverifikasi laporan staff unit', 'Menambahkan kegiatan wilayah', 'Membuat rekap wilayah', 'Memberi catatan revisi kepada staff'],
+        'mentor' => ['Melihat semua wilayah, unit, dan staff', 'Mengatur target pencapaian staff', 'Tidak melihat menu Kelola User'],
+        'koordinator' => ['Melihat data wilayahnya saja', 'Mengajukan laporan iklan wilayah', 'Memverifikasi laporan staff unit', 'Menambahkan kegiatan wilayah', 'Membuat rekap wilayah'],
         'staff' => ['Menambahkan laporan kegiatan', 'Melihat laporan milik sendiri', 'Edit hanya saat Draft atau Revisi', 'Tidak melihat wilayah lain', 'Tidak bisa menyetujui laporan'],
     ][$role] ?? [];
 }

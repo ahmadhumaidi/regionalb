@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+date_default_timezone_set('Asia/Jakarta');
+
 $sessionDir = __DIR__ . '/runtime/sessions';
 if (session_status() === PHP_SESSION_NONE) {
     if (!is_dir($sessionDir)) {
@@ -78,7 +80,7 @@ function rsm_ensure_schema(): void
             nik VARCHAR(80) NULL,
             username VARCHAR(100) NOT NULL,
             password_hash VARCHAR(255) NOT NULL,
-            role ENUM('senior','mentor','koordinator','staff') NOT NULL DEFAULT 'staff',
+            role ENUM('super_user','executive_director','director','senior','mentor','koordinator','staff') NOT NULL DEFAULT 'staff',
             jabatan VARCHAR(120) NOT NULL,
             regional VARCHAR(120) NULL,
             area VARCHAR(40) NULL,
@@ -128,6 +130,7 @@ function rsm_ensure_schema(): void
             closing_count INT UNSIGNED NOT NULL DEFAULT 0,
             notes TEXT NULL,
             platform VARCHAR(120) NULL,
+            ad_period VARCHAR(40) NULL,
             campaign_name VARCHAR(220) NULL,
             ad_goal VARCHAR(80) NULL,
             budget_requested DECIMAL(15,2) NOT NULL DEFAULT 0,
@@ -154,10 +157,99 @@ function rsm_ensure_schema(): void
     rsm_add_column_if_missing('rsm_reports', 'user_id', 'INT NULL AFTER report_date');
     rsm_add_column_if_missing('rsm_reports', 'partner_campus_id', 'INT NULL AFTER user_id');
     rsm_add_column_if_missing('rsm_reports', 'closing_count', 'INT UNSIGNED NOT NULL DEFAULT 0 AFTER leads_count');
+    rsm_add_column_if_missing('rsm_reports', 'ad_period', 'VARCHAR(40) NULL AFTER platform');
     rsm_add_column_if_missing('rsm_users', 'bio_text', 'TEXT NULL AFTER campus_name');
     rsm_add_column_if_missing('rsm_users', 'photo_path', 'VARCHAR(500) NULL AFTER bio_text');
     rsm_add_column_if_missing('rsm_users', 'phone_number', 'VARCHAR(80) NULL AFTER campus_name');
     rsm_add_column_if_missing('rsm_users', 'work_duration', 'VARCHAR(120) NULL AFTER phone_number');
+
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS rsm_ad_budget_limits (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            area VARCHAR(40) NOT NULL,
+            ad_period VARCHAR(40) NOT NULL,
+            wilayah VARCHAR(120) NOT NULL,
+            budget_limit DECIMAL(15,2) NOT NULL DEFAULT 0,
+            notes TEXT NULL,
+            created_by_user_id INT UNSIGNED NULL,
+            created_by_name VARCHAR(180) NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_rsm_ad_budget_limits_scope (area, ad_period, wilayah),
+            INDEX idx_rsm_ad_budget_limits_period (area, ad_period)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS rsm_social_accounts (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            area VARCHAR(40) NOT NULL,
+            wilayah VARCHAR(120) NOT NULL,
+            unit_name VARCHAR(180) NOT NULL,
+            instagram_username VARCHAR(180) NOT NULL,
+            instagram_business_id VARCHAR(180) NULL,
+            facebook_page_id VARCHAR(180) NULL,
+            facebook_page_token TEXT NULL,
+            token_expires_at DATETIME NULL,
+            connected_at DATETIME NULL,
+            pic_name VARCHAR(180) NULL,
+            pic_phone VARCHAR(80) NULL,
+            connection_status VARCHAR(60) NOT NULL DEFAULT 'Manual',
+            notes TEXT NULL,
+            is_active TINYINT(1) NOT NULL DEFAULT 1,
+            created_by_user_id INT UNSIGNED NULL,
+            created_by_name VARCHAR(180) NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_rsm_social_account (area, unit_name, instagram_username),
+            INDEX idx_rsm_social_account_scope (area, wilayah, unit_name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+    foreach ([
+        "ALTER TABLE rsm_social_accounts ADD COLUMN facebook_page_id VARCHAR(180) NULL AFTER instagram_business_id",
+        "ALTER TABLE rsm_social_accounts ADD COLUMN facebook_page_token TEXT NULL AFTER facebook_page_id",
+        "ALTER TABLE rsm_social_accounts ADD COLUMN token_expires_at DATETIME NULL AFTER facebook_page_token",
+        "ALTER TABLE rsm_social_accounts ADD COLUMN connected_at DATETIME NULL AFTER token_expires_at",
+    ] as $alterSql) {
+        try {
+            $pdo->exec($alterSql);
+        } catch (Throwable $e) {
+            // Column already exists or the database driver rejected a repeated migration.
+        }
+    }
+
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS rsm_social_posts (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            account_id INT UNSIGNED NOT NULL,
+            area VARCHAR(40) NOT NULL,
+            post_date DATE NOT NULL,
+            media_type ENUM('no_post','feed','reels','story') NOT NULL,
+            post_time TIME NULL,
+            caption TEXT NULL,
+            post_url VARCHAR(500) NULL,
+            keyword_match TINYINT(1) NOT NULL DEFAULT 0,
+            score INT UNSIGNED NOT NULL DEFAULT 0,
+            reach_count INT UNSIGNED NOT NULL DEFAULT 0,
+            like_count INT UNSIGNED NOT NULL DEFAULT 0,
+            comment_count INT UNSIGNED NOT NULL DEFAULT 0,
+            source_name VARCHAR(60) NOT NULL DEFAULT 'Manual',
+            created_by_user_id INT UNSIGNED NULL,
+            created_by_name VARCHAR(180) NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_rsm_social_posts_date (area, post_date),
+            INDEX idx_rsm_social_posts_account (account_id),
+            CONSTRAINT fk_rsm_social_posts_account
+                FOREIGN KEY (account_id) REFERENCES rsm_social_accounts(id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+    try {
+        $pdo->exec("ALTER TABLE rsm_social_posts MODIFY media_type ENUM('no_post','feed','reels','story') NOT NULL");
+    } catch (Throwable $e) {
+        // Ignore when the column is already compatible or the database driver rejects a no-op alter.
+    }
 
     $pdo->exec(
         "CREATE TABLE IF NOT EXISTS rsm_ad_leads (
@@ -210,6 +302,34 @@ function rsm_ensure_schema(): void
             INDEX idx_rsm_monthly_targets_scope (scope_type, scope_key)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
+
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS rsm_coordinator_schedules (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            area VARCHAR(40) NOT NULL,
+            schedule_date DATE NOT NULL,
+            koordinator_user_id INT UNSIGNED NULL,
+            koordinator_name VARCHAR(180) NOT NULL,
+            koordinator_home VARCHAR(120) NULL,
+            wilayah VARCHAR(120) NOT NULL,
+            unit_name VARCHAR(180) NOT NULL,
+            visit_type ENUM('Fisik','Zoom','Telepon') NOT NULL DEFAULT 'Zoom',
+            agenda VARCHAR(220) NOT NULL,
+            status ENUM('Rencana','Dijadwalkan','Selesai','Reschedule') NOT NULL DEFAULT 'Rencana',
+            result_text TEXT NULL,
+            next_action TEXT NULL,
+            attachment_path VARCHAR(500) NULL,
+            created_by_user_id INT UNSIGNED NULL,
+            created_by_name VARCHAR(180) NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_rsm_coord_schedule_area_date (area, schedule_date),
+            INDEX idx_rsm_coord_schedule_wilayah (area, wilayah),
+            INDEX idx_rsm_coord_schedule_korwil (koordinator_name),
+            UNIQUE KEY uq_rsm_coord_schedule_day_unit (area, schedule_date, koordinator_name, unit_name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+    rsm_add_column_if_missing('rsm_coordinator_schedules', 'attachment_path', 'VARCHAR(500) NULL AFTER next_action');
 
     $pdo->exec(
         "CREATE TABLE IF NOT EXISTS rsm_bdc_report_user_snapshots (
@@ -278,7 +398,7 @@ function rsm_seed_users(): void
     $pdo = rsm_pdo();
 
     $specialUsers = [
-        ['Ahmad Humaidi', 'SG.0202.2014', 'senior', 'Regional Senior Manager B', 'Regional 7', 'Regional B', 'ITB STIKOM Bali'],
+        ['Ahmad Humaidi', 'SG.0202.2014', 'super_user', 'Super User', 'Regional 7', 'Regional B', 'ITB STIKOM Bali'],
         ['Nugroho Budi Santoso', 'SG.0631.2021', 'koordinator', 'Koordinator Regional 7', 'Regional 7', 'Regional B', 'POLNAS'],
         ['Hamaruddin', null, 'koordinator', 'Koordinator Regional 4', 'Regional 4', 'Regional B', null],
         ['Kundi Harto', null, 'koordinator', 'Koordinator Regional 5', 'Regional 5', 'Regional B', null],
@@ -303,8 +423,8 @@ function rsm_upsert_user(string $name, ?string $nik, string $role, string $jabat
     $existingId = $stmt->fetchColumn();
     if ($existingId) {
         if ($role !== 'staff') {
-            rsm_pdo()->prepare('UPDATE rsm_users SET is_active = 1 WHERE id = ?')
-                ->execute([$existingId]);
+            rsm_pdo()->prepare('UPDATE rsm_users SET role = ?, jabatan = ?, regional = ?, area = ?, campus_name = COALESCE(NULLIF(campus_name, ""), ?), is_active = 1, updated_at = NOW() WHERE id = ?')
+                ->execute([$role, $jabatan, $regional, $area, $campus, $existingId]);
         }
         return;
     }
@@ -369,14 +489,44 @@ function rsm_ensure_user_role_enum(): void
     );
     $stmt->execute();
     $columnType = (string) $stmt->fetchColumn();
-    if (!str_contains($columnType, "'mentor'")) {
-        rsm_pdo()->exec("ALTER TABLE rsm_users MODIFY role ENUM('senior','mentor','koordinator','staff') NOT NULL DEFAULT 'staff'");
+    if (!str_contains($columnType, "'executive_director'") || !str_contains($columnType, "'director'") || !str_contains($columnType, "'super_user'")) {
+        rsm_pdo()->exec("ALTER TABLE rsm_users MODIFY role ENUM('super_user','executive_director','director','senior','mentor','koordinator','staff') NOT NULL DEFAULT 'staff'");
     }
 }
 
 function rsm_input(string $key, string $fallback = ''): string
 {
     return trim((string) ($_POST[$key] ?? $fallback));
+}
+
+function rsm_month_name_id(int $month): string
+{
+    $names = [
+        1 => 'Januari',
+        2 => 'Februari',
+        3 => 'Maret',
+        4 => 'April',
+        5 => 'Mei',
+        6 => 'Juni',
+        7 => 'Juli',
+        8 => 'Agustus',
+        9 => 'September',
+        10 => 'Oktober',
+        11 => 'November',
+        12 => 'Desember',
+    ];
+
+    return $names[$month] ?? date('F');
+}
+
+function rsm_default_ad_period(string $date = ''): string
+{
+    $timestamp = $date !== '' ? strtotime($date) : false;
+    if ($timestamp === false) {
+        $timestamp = time();
+    }
+
+    return rsm_month_name_id((int) date('n', $timestamp)) . ' ' . date('Y', $timestamp);
 }
 
 function rsm_number_input(string $key): float
@@ -398,6 +548,9 @@ function rsm_current_actor(string $role): array
     }
 
     $labels = [
+        'super_user' => 'Super User',
+        'executive_director' => 'Executive Director',
+        'director' => 'Director',
         'senior' => 'Senior Manager',
         'mentor' => 'Mentor',
         'koordinator' => 'Koordinator Wilayah',
@@ -408,6 +561,167 @@ function rsm_current_actor(string $role): array
         'role' => $role,
         'name' => $labels[$role] ?? 'User RSM',
     ];
+}
+
+function rsm_seed_campus_master(): void
+{
+    $pdo = rsm_pdo();
+    $exists = (int) $pdo->query("SELECT COUNT(*) FROM rsm_campus_master WHERE area = 'Regional B'")->fetchColumn();
+    if ($exists > 0) {
+        return;
+    }
+
+    $rows = [
+        ['Regional 4', 'Universitas Hamzanwadi', 'UHAMZAH', 'UHAMZAH', 'Universitas Hamzanwadi; Hamzanwadi'],
+        ['Regional 4', 'UIN Al-Azhaar Lubuklinggau', 'UIN Al-Azhaar Lubuklinggau', 'UINAZ', 'UIN Al Azhaar; UIN Al-Azhaar'],
+        ['Regional 4', 'Universitas Taman Siswa', 'UTS', 'UTS', 'Universitas Taman Siswa; Taman Siswa'],
+        ['Regional 4', 'Universitas Ubudiyah Indonesia', 'UUI', 'UUI', 'Universitas Ubudiyah Indonesia (UUI)'],
+        ['Regional 4', 'Universitas Patria Artha', 'Universitas Patria Artha', 'UPA', 'Universitas Patria Artha (UPA)'],
+        ['Regional 5', 'Universitas AKI Semarang', 'UNAKI', 'UNAKI', 'Universitas AKI; Universitas AKI Semarang'],
+        ['Regional 5', 'Institut Manajemen dan Administrasi Yogyakarta', 'IMA', 'IMA', 'IMA Yogyakarta'],
+        ['Regional 5', 'Universitas Ivet', 'IVET Semarang', 'IVET', 'Universitas Ivet; IVET'],
+        ['Regional 5', 'STBA LIA Yogyakarta', 'STBA Lia Yogyakarta', 'STBA LIA', 'STBA Lia; STBA LIA Yogyakarta'],
+        ['Regional 5', 'Universitas Boyolali', 'UBY', 'UBY', 'Universitas Boyolali'],
+        ['Regional 5', 'Universitas Darul Ulum Islamic Centre Sudirman', 'UNDARIS', 'UNDARIS', 'UNDARIS Semarang'],
+        ['Regional 5', 'Universitas Nahdlatul Ulama Al Ghazali Cilacap', 'UNUGHA Cilacap', 'UNUGHA', 'UNUGHA; UNU Al Ghazali Cilacap'],
+        ['Regional 6', 'IKIP Widya Darma Surabaya', 'IKIP Widya Darma', 'IKIP WD', 'Institut Keguruan dan Ilmu Pendidikan Widya Darma Surabaya (IKIP) [IWD]'],
+        ['Regional 6', 'Universitas Muhammadiyah Surabaya', 'UM Surabaya', 'UMS', 'Universitas Muhammadiyah Surabaya (UM Surabaya) [UMS]'],
+        ['Regional 6', 'Universitas Gresik', 'UNIGRES', 'GRS', 'Universitas Gresik (UNIGRES) [GRS]'],
+        ['Regional 6', 'Universitas Widya Kartika', 'UWK Surabaya', 'UWK', 'Universitas Widya Kartika; Universitas Widya Kartika (UWIKA) [UWK]'],
+        ['Regional 6', 'STIESIA Surabaya', 'STIESIA Surabaya', 'SIA', 'Sekolah Tinggi Ilmu Ekonomi Indonesia (STIESIA) [SIA]'],
+        ['Regional 6', 'STIE Artha Bodhi Iswara', 'STIE ABI', 'SAS', 'Sekolah Tinggi Ilmu Ekonomi Artha Bodhi Iswara (STIE ABI) [SAS]'],
+        ['Regional 7', 'Institut Teknologi dan Bisnis STIKOM Bali', 'ITB STIKOM Bali', 'STIKOM', 'STIKOM Bali; ITB STIKOM Bali'],
+        ['Regional 7', 'Universitas Bhinneka Nusantara', 'UNIBHINUS', 'UNIBHINUS', 'Universitas Bhinneka Nusantara (UNIBHINUS)'],
+        ['Regional 7', 'Universitas Bakti Indonesia Banyuwangi', 'UNIBABWI', 'UNIBABWI', 'Universitas Bakti Indonesia; UNIBABWI'],
+        ['Regional 7', 'Universitas Mochammad Sroedji Jember', 'Universitas Mochammad Sroedji', 'UMSJ', 'Universitas Mochammad Sroedji Jember; UMSJ'],
+        ['Regional 7', 'Politeknik Nasional Denpasar', 'POLNAS', 'POLNAS', 'Politeknik Nasional Denpasar (POLNAS)'],
+        ['Regional 7', 'Universitas Kahuripan Kediri', 'UKK Kediri', 'UKK', 'Universitas Kahuripan Kediri (UKK Kediri)'],
+        ['Regional 7', 'Universitas Nahdlatul Ulama Kalimantan Timur', 'UNU KALTIM', 'UNU KALTIM', 'Universitas Nahdlatul Ulama Kalimantan Timur (UNU KALTIM)'],
+    ];
+
+    $stmt = $pdo->prepare(
+        'INSERT INTO rsm_campus_master
+            (area, regional, official_name, display_name, campus_code, aliases, partner_status, source_name)
+         VALUES
+            ("Regional B", ?, ?, ?, ?, ?, "Aktif", "Seed awal RSM")'
+    );
+    foreach ($rows as $row) {
+        $stmt->execute($row);
+    }
+}
+
+function rsm_master_campuses(string $area): array
+{
+    $sql = "SELECT cm.*,
+              COALESCE(NULLIF(cm.pic_staff_name, ''), NULLIF(u.name, '')) AS resolved_pic_name,
+              COALESCE(NULLIF(cm.pic_nik, ''), NULLIF(u.nik, '')) AS resolved_pic_nik,
+              COALESCE(NULLIF(cm.pic_phone, ''), NULLIF(u.phone_number, '')) AS resolved_pic_phone
+            FROM rsm_campus_master cm
+            LEFT JOIN rsm_users u
+              ON u.area = cm.area
+             AND u.role = 'staff'
+             AND u.is_active = 1
+             AND (
+                NULLIF(cm.pic_nik, '') = u.nik
+                OR (NULLIF(cm.pic_staff_name, '') IS NOT NULL AND LOWER(cm.pic_staff_name) = LOWER(u.name))
+                OR LOWER(cm.display_name) = LOWER(u.campus_name)
+                OR LOWER(cm.official_name) = LOWER(u.campus_name)
+             )
+            WHERE cm.area = ?
+            GROUP BY cm.id
+            ORDER BY cm.regional ASC, cm.display_name ASC";
+    $stmt = rsm_pdo()->prepare($sql);
+    $stmt->execute([$area]);
+    return $stmt->fetchAll();
+}
+
+function rsm_save_master_campus(string $area, array $actor): void
+{
+    if (!in_array((string) ($actor['role'] ?? ''), ['super_user', 'senior', 'mentor'], true)) {
+        throw new RuntimeException('Hanya Senior Manager atau Mentor yang bisa mengubah master kampus.');
+    }
+
+    $id = (int) rsm_input('campus_master_id');
+    $regional = rsm_input('regional');
+    $officialName = rsm_input('official_name');
+    $displayName = rsm_input('display_name');
+    $campusCode = rsm_input('campus_code');
+    $aliases = rsm_input('aliases');
+    $picStaffName = rsm_input('pic_staff_name');
+    $picNik = rsm_input('pic_nik');
+    $picPhone = rsm_input('pic_phone');
+    $partnerStatus = rsm_input('partner_status', 'Aktif');
+    $sourceName = rsm_input('source_name');
+    $sourceUrl = rsm_input('source_url');
+    $notes = rsm_input('notes');
+    $isActive = rsm_input('is_active', '1') === '1' ? 1 : 0;
+
+    if ($regional === '' || $officialName === '' || $displayName === '') {
+        throw new InvalidArgumentException('Regional, nama resmi, dan nama tampil pendek wajib diisi.');
+    }
+    if (!in_array($regional, rsm_area_regionals($area), true)) {
+        throw new InvalidArgumentException('Regional tidak sesuai area aktif.');
+    }
+
+    if ($id > 0) {
+        rsm_pdo()->prepare(
+            'UPDATE rsm_campus_master
+             SET regional = ?, official_name = ?, display_name = ?, campus_code = ?, aliases = ?,
+                 pic_staff_name = ?, pic_nik = ?, pic_phone = ?, partner_status = ?,
+                 source_name = ?, source_url = ?, notes = ?, is_active = ?, updated_at = NOW()
+             WHERE id = ? AND area = ?'
+        )->execute([
+            $regional,
+            $officialName,
+            $displayName,
+            $campusCode !== '' ? $campusCode : null,
+            $aliases !== '' ? $aliases : null,
+            $picStaffName !== '' ? $picStaffName : null,
+            $picNik !== '' ? $picNik : null,
+            $picPhone !== '' ? $picPhone : null,
+            $partnerStatus !== '' ? $partnerStatus : 'Aktif',
+            $sourceName !== '' ? $sourceName : null,
+            $sourceUrl !== '' ? $sourceUrl : null,
+            $notes !== '' ? $notes : null,
+            $isActive,
+            $id,
+            $area,
+        ]);
+        return;
+    }
+
+    rsm_pdo()->prepare(
+        'INSERT INTO rsm_campus_master
+            (area, regional, official_name, display_name, campus_code, aliases, pic_staff_name, pic_nik, pic_phone, partner_status, source_name, source_url, notes, is_active)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    )->execute([
+        $area,
+        $regional,
+        $officialName,
+        $displayName,
+        $campusCode !== '' ? $campusCode : null,
+        $aliases !== '' ? $aliases : null,
+        $picStaffName !== '' ? $picStaffName : null,
+        $picNik !== '' ? $picNik : null,
+        $picPhone !== '' ? $picPhone : null,
+        $partnerStatus !== '' ? $partnerStatus : 'Aktif',
+        $sourceName !== '' ? $sourceName : null,
+        $sourceUrl !== '' ? $sourceUrl : null,
+        $notes !== '' ? $notes : null,
+        $isActive,
+    ]);
+}
+
+function rsm_delete_master_campus(string $area, array $actor): void
+{
+    if (!in_array((string) ($actor['role'] ?? ''), ['super_user', 'senior', 'mentor'], true)) {
+        throw new RuntimeException('Hanya Senior Manager atau Mentor yang bisa menghapus master kampus.');
+    }
+    $id = (int) rsm_input('campus_master_id');
+    if ($id <= 0) {
+        throw new InvalidArgumentException('Data kampus tidak valid.');
+    }
+    rsm_pdo()->prepare('DELETE FROM rsm_campus_master WHERE id = ? AND area = ?')->execute([$id, $area]);
 }
 
 function rsm_auth_user(): ?array
@@ -446,17 +760,22 @@ function rsm_admin_actor(): ?array
 
 function rsm_can_impersonate(?array $user): bool
 {
-    return in_array((string) ($user['role'] ?? ''), ['senior'], true);
+    return in_array((string) ($user['role'] ?? ''), ['super_user', 'executive_director', 'director', 'senior'], true);
 }
 
 function rsm_can_manage_targets(?array $user): bool
 {
-    return in_array((string) ($user['role'] ?? ''), ['senior', 'mentor'], true);
+    return in_array((string) ($user['role'] ?? ''), ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true);
 }
 
 function rsm_can_sync_collab(?array $user): bool
 {
-    return in_array((string) ($user['role'] ?? ''), ['senior', 'mentor'], true);
+    return in_array((string) ($user['role'] ?? ''), ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true);
+}
+
+function rsm_can_manage_ad_budget(?array $user): bool
+{
+    return in_array((string) ($user['role'] ?? ''), ['super_user', 'senior'], true);
 }
 
 function rsm_impersonate_user(string $area, int $targetUserId): void
@@ -630,15 +949,73 @@ function rsm_report_attachment_upload(int $reportId): ?string
     return $relativePath;
 }
 
+function rsm_schedule_attachment_upload(int $scheduleId): ?string
+{
+    $file = $_FILES['schedule_attachment'] ?? null;
+    if (!is_array($file) || (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+        return null;
+    }
+    if ((int) ($file['error'] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK) {
+        throw new RuntimeException('Upload dokumentasi aktivitas gagal.');
+    }
+    if ((int) ($file['size'] ?? 0) > 5 * 1024 * 1024) {
+        throw new InvalidArgumentException('Ukuran dokumentasi aktivitas maksimal 5 MB.');
+    }
+
+    $tmpName = (string) ($file['tmp_name'] ?? '');
+    $originalName = (string) ($file['name'] ?? 'dokumentasi');
+    $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+    $allowedExtensions = ['jpg', 'jpeg', 'png', 'webp', 'pdf'];
+    $allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+    $mime = (string) (@mime_content_type($tmpName) ?: '');
+    if (!in_array($extension, $allowedExtensions, true) || !in_array($mime, $allowedMimes, true)) {
+        throw new InvalidArgumentException('Dokumentasi aktivitas wajib JPG, PNG, WEBP, atau PDF.');
+    }
+
+    $uploadDir = __DIR__ . '/runtime/uploads/schedules';
+    if (!is_dir($uploadDir)) {
+        mkdir($uploadDir, 0775, true);
+    }
+    $safeName = preg_replace('/[^a-z0-9._-]+/i', '-', pathinfo($originalName, PATHINFO_FILENAME)) ?: 'dokumentasi';
+    $relativePath = 'runtime/uploads/schedules/schedule-' . $scheduleId . '-' . date('Ymd-His') . '-' . $safeName . '.' . $extension;
+    $target = __DIR__ . '/' . $relativePath;
+    if (!move_uploaded_file($tmpName, $target)) {
+        throw new RuntimeException('Dokumentasi aktivitas tidak bisa disimpan.');
+    }
+
+    return $relativePath;
+}
+
+function rsm_add_unique_coordinator(array &$coordinators, string $regional, array $user): void
+{
+    $nameKey = mb_strtolower(trim((string) ($user['name'] ?? '')));
+    if ($nameKey === '') {
+        $coordinators[$regional][] = $user;
+        return;
+    }
+    foreach ($coordinators[$regional] ?? [] as $index => $existing) {
+        if (mb_strtolower(trim((string) ($existing['name'] ?? ''))) !== $nameKey) {
+            continue;
+        }
+        $existingHasPhoto = trim((string) ($existing['photo_path'] ?? '')) !== '';
+        $newHasPhoto = trim((string) ($user['photo_path'] ?? '')) !== '';
+        if (!$existingHasPhoto && $newHasPhoto) {
+            $coordinators[$regional][$index] = $user;
+        }
+        return;
+    }
+    $coordinators[$regional][] = $user;
+}
+
 function rsm_users(string $area): array
 {
     $sql = "SELECT * FROM rsm_users WHERE is_active IN (0,1)";
     $params = [];
     if ($area !== 'Regional') {
-        $sql .= " AND (area = ? OR area IS NULL OR role = 'senior')";
+        $sql .= " AND (area = ? OR area IS NULL OR role IN ('super_user','executive_director','director','senior'))";
         $params[] = $area;
     }
-    $sql .= " ORDER BY FIELD(role, 'senior', 'mentor', 'koordinator', 'staff'), regional ASC, name ASC";
+    $sql .= " ORDER BY FIELD(role, 'super_user', 'executive_director', 'director', 'senior', 'mentor', 'koordinator', 'staff'), regional ASC, name ASC";
     $stmt = rsm_pdo()->prepare($sql);
     $stmt->execute($params);
     return $stmt->fetchAll();
@@ -850,7 +1227,7 @@ function rsm_sync_users_from_collab(string $area): array
 
 function rsm_admin_save_user(string $area, array $actor): void
 {
-    if (($actor['role'] ?? '') !== 'senior') {
+    if (!in_array((string) ($actor['role'] ?? ''), ['super_user', 'senior'], true)) {
         throw new RuntimeException('Hanya Regional Senior Manager yang bisa mengelola user.');
     }
 
@@ -869,7 +1246,7 @@ function rsm_admin_save_user(string $area, array $actor): void
     if ($name === '' || $username === '' || $role === '') {
         throw new InvalidArgumentException('Nama, username, dan role wajib diisi.');
     }
-    if (!in_array($role, ['senior', 'mentor', 'koordinator', 'staff'], true)) {
+    if (!in_array($role, ['super_user', 'executive_director', 'director', 'senior', 'mentor', 'koordinator', 'staff'], true)) {
         throw new InvalidArgumentException('Role user tidak valid.');
     }
     if (strlen($password) < 6) {
@@ -902,7 +1279,7 @@ function rsm_admin_save_user(string $area, array $actor): void
 
 function rsm_admin_update_user(array $actor): void
 {
-    if (($actor['role'] ?? '') !== 'senior') {
+    if (!in_array((string) ($actor['role'] ?? ''), ['super_user', 'senior'], true)) {
         throw new RuntimeException('Hanya Regional Senior Manager yang bisa mengedit user.');
     }
 
@@ -921,7 +1298,7 @@ function rsm_admin_update_user(array $actor): void
     if ($userId <= 0 || $name === '' || $username === '') {
         throw new InvalidArgumentException('Data edit user belum lengkap.');
     }
-    if (!in_array($role, ['senior', 'mentor', 'koordinator', 'staff'], true)) {
+    if (!in_array($role, ['super_user', 'executive_director', 'director', 'senior', 'mentor', 'koordinator', 'staff'], true)) {
         throw new InvalidArgumentException('Role user tidak valid.');
     }
 
@@ -953,6 +1330,9 @@ function rsm_admin_update_user(array $actor): void
 function rsm_jabatan_from_role(string $role): string
 {
     return [
+        'super_user' => 'Super User',
+        'executive_director' => 'Executive Director',
+        'director' => 'Director',
         'senior' => 'Senior Manager',
         'mentor' => 'Mentor',
         'koordinator' => 'Koordinator Wilayah',
@@ -962,7 +1342,7 @@ function rsm_jabatan_from_role(string $role): string
 
 function rsm_admin_reset_user_password(array $actor): void
 {
-    if (($actor['role'] ?? '') !== 'senior') {
+    if (!in_array((string) ($actor['role'] ?? ''), ['super_user', 'senior'], true)) {
         throw new RuntimeException('Hanya Regional Senior Manager yang bisa reset password user.');
     }
     $userId = (int) rsm_input('user_id');
@@ -977,7 +1357,7 @@ function rsm_admin_reset_user_password(array $actor): void
 
 function rsm_admin_delete_user(array $actor): void
 {
-    if (($actor['role'] ?? '') !== 'senior') {
+    if (!in_array((string) ($actor['role'] ?? ''), ['super_user', 'senior'], true)) {
         throw new RuntimeException('Hanya Regional Senior Manager yang bisa menghapus user.');
     }
     $userId = (int) rsm_input('user_id');
@@ -1007,7 +1387,7 @@ function rsm_admin_delete_user(array $actor): void
 
 function rsm_admin_set_user_active(array $actor): void
 {
-    if (($actor['role'] ?? '') !== 'senior') {
+    if (!in_array((string) ($actor['role'] ?? ''), ['super_user', 'senior'], true)) {
         throw new RuntimeException('Hanya Regional Senior Manager yang bisa mengubah status user.');
     }
     $userId = (int) rsm_input('user_id');
@@ -1147,13 +1527,298 @@ function rsm_reference_options(string $area, ?array $user = null, string $effect
                   ORDER BY regional IS NULL, regional ASC, label ASC";
     $stmt = $pdo->prepare($campusSql);
     $stmt->execute($campusParams);
-    $campuses = $stmt->fetchAll();
+    $campuses = array_values(array_filter(
+        rsm_canonical_campus_options($stmt->fetchAll()),
+        static fn (array $campus): bool => !rsm_is_inactive_campus_label((string) ($campus['label'] ?? ''), (string) ($campus['kode_kampus'] ?? ''))
+    ));
 
     return [
         'regionals' => $regionalOptions,
         'staff' => $staff,
         'campuses' => $campuses,
     ];
+}
+
+function rsm_normalize_campus_alias(string $value): string
+{
+    $value = strtoupper(trim($value));
+    return preg_replace('/[^A-Z0-9]+/', '', $value) ?? '';
+}
+
+function rsm_is_inactive_campus_label(string $label, string $code = ''): bool
+{
+    $keys = [
+        strtoupper(trim($label)),
+        strtoupper(trim($code)),
+        rsm_normalize_campus_alias($label),
+        rsm_normalize_campus_alias($code),
+    ];
+    $inactiveKeys = ['UCM'];
+    foreach ($keys as $key) {
+        if ($key !== '' && in_array($key, $inactiveKeys, true)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function rsm_master_campus_reference_options(string $area, array $regionals = []): array
+{
+    $params = [$area];
+    $regionalSql = '';
+    if ($regionals !== []) {
+        $regionalSql = ' AND regional IN (' . implode(',', array_fill(0, count($regionals), '?')) . ')';
+        $params = array_merge($params, $regionals);
+    }
+    $stmt = rsm_pdo()->prepare(
+        "SELECT id, display_name AS label, campus_code AS kode_kampus, regional
+         FROM rsm_campus_master
+         WHERE area = ?
+           AND is_active = 1
+           {$regionalSql}
+         ORDER BY regional ASC, display_name ASC"
+    );
+    $stmt->execute($params);
+    return $stmt->fetchAll();
+}
+
+function rsm_canonical_campus_options(array $rows): array
+{
+    $result = [];
+    $seenKeys = [];
+    $pics = rsm_campus_pic_lookup();
+    foreach ($rows as $row) {
+        $label = trim((string) ($row['label'] ?? ''));
+        if ($label === '') {
+            continue;
+        }
+        $cleanLabel = rsm_campus_canonical_label($label);
+        $key = rsm_campus_alias_key($cleanLabel);
+        if ($key === '') {
+            $key = strtolower(preg_replace('/[^a-z0-9]+/i', '', $cleanLabel) ?? $cleanLabel);
+        }
+        if ($key !== '' && isset($seenKeys[$key])) {
+            continue;
+        }
+        if ($key !== '') {
+            $seenKeys[$key] = true;
+        }
+        $row['label'] = $cleanLabel;
+        $row['kode_kampus'] = null;
+        $pic = $pics[$key] ?? [];
+        $row['pic_name'] = (string) ($pic['name'] ?? '');
+        $row['pic_phone'] = (string) ($pic['phone_number'] ?? '');
+        $result[] = $row;
+    }
+
+    usort($result, static fn (array $a, array $b): int => strcmp((string) ($a['regional'] ?? ''), (string) ($b['regional'] ?? '')) ?: strcmp((string) ($a['label'] ?? ''), (string) ($b['label'] ?? '')));
+    return $result;
+}
+
+function rsm_campus_pic_lookup(): array
+{
+    try {
+        $stmt = rsm_pdo()->query(
+            "SELECT name, campus_name, phone_number
+             FROM rsm_users
+             WHERE role = 'staff'
+               AND is_active = 1
+               AND NULLIF(campus_name, '') IS NOT NULL
+             ORDER BY campus_name ASC, name ASC"
+        );
+        $rows = $stmt ? $stmt->fetchAll() : [];
+    } catch (Throwable) {
+        return [];
+    }
+
+    $lookup = [];
+    foreach ($rows as $row) {
+        $campus = rsm_campus_canonical_label((string) ($row['campus_name'] ?? ''));
+        $key = rsm_campus_alias_key($campus);
+        if ($key === '') {
+            $key = strtolower(preg_replace('/[^a-z0-9]+/i', '', $campus) ?? $campus);
+        }
+        if ($key === '' || isset($lookup[$key])) {
+            continue;
+        }
+        $lookup[$key] = [
+            'name' => (string) ($row['name'] ?? ''),
+            'phone_number' => (string) ($row['phone_number'] ?? ''),
+        ];
+    }
+
+    return $lookup;
+}
+
+function rsm_is_campus_alias_of_canonical(string $label, array $canonicalRows): bool
+{
+    $labelKey = rsm_campus_alias_key($label);
+    if ($labelKey === '') {
+        return false;
+    }
+    foreach ($canonicalRows as $canonical) {
+        $canonicalLabel = (string) ($canonical['label'] ?? '');
+        $canonicalCode = (string) ($canonical['kode_kampus'] ?? '');
+        $aliases = array_filter([
+            $canonicalLabel,
+            $canonicalCode,
+            rsm_campus_short_label($canonicalLabel),
+        ]);
+        foreach ($aliases as $alias) {
+            $aliasKey = rsm_campus_alias_key((string) $alias);
+            if ($aliasKey !== '' && ($labelKey === $aliasKey || str_contains($labelKey, $aliasKey) || str_contains($aliasKey, $labelKey))) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function rsm_campus_alias_key(string $label): string
+{
+    $label = strtolower(trim($label));
+    $label = str_replace(['-', '_'], ' ', $label);
+    $label = preg_replace('/\s+/', ' ', $label) ?? $label;
+    $aliasGroups = [
+        'uinaz' => ['universitas islam nusantara al azhaar lubuklinggau', 'universitas islam nusantara al-azhaar lubuklinggau', 'uin al azhaar lubuklinggau', 'uin al-azhaar lubuklinggau', 'inaal', 'uaal', 'uinaz'],
+        'ivet' => ['universitas ivet', 'ivet semarang', 'ivet'],
+        'uwks' => ['universitas wijaya kusuma surabaya', 'uwk surabaya', 'uwks'],
+        'uwika' => ['universitas widya kartika', 'uwika', 'uwk'],
+        'uhamzah' => ['uhamzah', 'universitas hamzanwadi', 'universitas hamzah'],
+        'stikombali' => ['institut teknologi dan bisnis stikom bali', 'itb stikom bali', 'kom'],
+        'polnas' => ['politeknik nasional denpasar', 'polnas', 'pl'],
+        'indocakti' => ['stie indocakti', 'sekolah tinggi ilmu ekonomi indocakti malang', 'imsi', 'ict'],
+        'ubhinus' => ['universitas bhinneka nusantara', 'ubhinus', 'stk'],
+        'ukk' => ['universitas kahuripan kediri', 'ukk', 'kkuk'],
+        'umsj' => ['universitas mochammad sroedji jember', 'umsj', 'msj'],
+        'ima' => ['ima', 'mhaakb', 'institut miftahul huda al azhar kota banjar'],
+        'stbalia' => ['stba lia yogyakarta', 'balysl', 'sekolah tinggi bahasa asing lia yogyakarta'],
+    ];
+    foreach ($aliasGroups as $key => $aliases) {
+        foreach ($aliases as $alias) {
+            if (str_contains($label, $alias)) {
+                return $key;
+            }
+        }
+    }
+    $label = preg_replace('/\[[^\]]+\]|\([^\)]+\)/', ' ', $label) ?? $label;
+    $label = str_replace(['universitas', 'institut', 'sekolah tinggi ilmu ekonomi', 'sekolah tinggi', 'surabaya'], ' ', $label);
+    return preg_replace('/[^a-z0-9]+/', '', $label) ?? '';
+}
+
+function rsm_campus_canonical_label(string $label): string
+{
+    $canonical = [
+        'uinaz' => 'Universitas Islam Nusantara Al-Azhaar Lubuklinggau',
+        'ivet' => 'Universitas IVET',
+        'uwks' => 'Universitas Wijaya Kusuma Surabaya',
+        'uwika' => 'Universitas Widya Kartika',
+        'uhamzah' => 'UHAMZAH',
+        'stikombali' => 'Institut Teknologi dan Bisnis STIKOM Bali',
+        'polnas' => 'Politeknik Nasional Denpasar',
+        'indocakti' => 'STIE INDOCAKTI',
+        'ubhinus' => 'Universitas Bhinneka Nusantara',
+        'ukk' => 'Universitas Kahuripan Kediri',
+        'umsj' => 'Universitas Mochammad Sroedji Jember',
+        'ima' => 'IMA',
+        'stbalia' => 'STBA LIA Yogyakarta',
+    ][rsm_campus_alias_key($label)] ?? $label;
+
+    return rsm_campus_plain_label($canonical);
+}
+
+function rsm_campus_plain_label(string $label): string
+{
+    $label = preg_replace('/\s*[\(\[].*?[\)\]]\s*/', ' ', $label) ?? $label;
+    $label = preg_replace('/\s+/', ' ', trim($label)) ?? trim($label);
+
+    return $label !== '' ? $label : '-';
+}
+
+function rsm_campus_alias_variants(string $label): array
+{
+    $key = rsm_campus_alias_key($label);
+    $variants = [
+        'uinaz' => ['Universitas Islam Nusantara Al-Azhaar Lubuklinggau', 'UIN Al-Azhaar Lubuklinggau', 'UIN Al Azhaar Lubuklinggau', 'INAAL', 'UAAL', 'UINAZ'],
+        'ivet' => ['Universitas IVET', 'IVET Semarang', 'IVET'],
+        'uwks' => ['Universitas Wijaya Kusuma Surabaya', 'UWK Surabaya', 'UWKS'],
+        'uwika' => ['Universitas Widya Kartika', 'Universitas Widya Kartika (UWIKA)', 'UWIKA', 'UWK'],
+        'uhamzah' => ['UHAMZAH', 'Universitas Hamzanwadi', 'Universitas Hamzah'],
+        'stikombali' => ['Institut Teknologi dan Bisnis STIKOM Bali', 'ITB STIKOM Bali', 'KOM'],
+        'polnas' => ['Politeknik Nasional Denpasar', 'POLNAS', 'PL'],
+        'indocakti' => ['STIE INDOCAKTI', 'Sekolah Tinggi Ilmu Ekonomi Indocakti Malang', 'IMSI', 'ICT'],
+        'ubhinus' => ['Universitas Bhinneka Nusantara', 'UBHINUS', 'STK'],
+        'ukk' => ['Universitas Kahuripan Kediri', 'UKK', 'KKUK'],
+        'umsj' => ['Universitas Mochammad Sroedji Jember', 'UMSJ', 'MSJ'],
+        'ima' => ['IMA', 'MHAAKB', 'Institut Miftahul Huda Al Azhar Kota Banjar'],
+        'stbalia' => ['STBA LIA Yogyakarta', 'BALYSL', 'Sekolah Tinggi Bahasa Asing LIA Yogyakarta'],
+    ];
+    if ($key === '' || !isset($variants[$key])) {
+        return [$label];
+    }
+
+    return array_values(array_unique(array_filter(array_merge([$label, rsm_campus_canonical_label($label)], $variants[$key]), static fn (string $value): bool => trim($value) !== '')));
+}
+
+function rsm_add_unit_name_filter(array &$where, array &$params, string $column, string $value): void
+{
+    $variants = rsm_campus_alias_variants($value);
+    $where[] = $column . ' IN (' . implode(',', array_fill(0, count($variants), '?')) . ')';
+    foreach ($variants as $variant) {
+        $params[] = $variant;
+    }
+}
+
+function rsm_campus_short_label(string $label): string
+{
+    $label = trim($label);
+    if ($label === '') {
+        return '';
+    }
+    $upper = mb_strtoupper($label);
+    $codeMap = [
+        'MSJ' => 'UMSJ',
+        'IMSI' => 'INDOCAKTI',
+        'KKUK' => 'UKK',
+        'INAAL' => 'UINAZ',
+        'UAAL' => 'UINAZ',
+        'MHAAKB' => 'IMA',
+        'BALYSL' => 'STBA LIA',
+    ];
+    if (isset($codeMap[$upper])) {
+        return $codeMap[$upper];
+    }
+    if (preg_match('/\[\s*([A-Z0-9 .-]{2,18})\s*\]/u', $label, $match)) {
+        $code = mb_strtoupper(trim($match[1]));
+        return $codeMap[$code] ?? $code;
+    }
+    if (preg_match('/\(([^\)]+)\)/', $label, $matches)) {
+        $code = mb_strtoupper(trim((string) $matches[1]));
+        return $codeMap[$code] ?? $code;
+    }
+    $manual = [
+        'Universitas Taman Siswa' => 'Taman Siswa',
+        'Universitas Teknologi Sulawesi' => 'UTS',
+        'Universitas Ubudiyah Indonesia' => 'UUI',
+        'Universitas IVET' => 'IVET',
+        'IVET Semarang' => 'IVET',
+        'UM Surabaya' => 'UMS',
+        'Universitas Muhammadiyah Surabaya' => 'UMS',
+        'UWK Surabaya' => 'UWKS',
+        'Universitas Wijaya Kusuma Surabaya' => 'UWKS',
+        'Universitas Widya Kartika' => 'UWIKA',
+        'UIN Al-Azhaar Lubuklinggau' => 'UINAZ',
+        'UIN Al Azhaar Lubuklinggau' => 'UINAZ',
+        'UHAMZAH' => 'UHAMZAH',
+        'STIESIA Surabaya' => 'STIESIA',
+        'Sekolah Tinggi Ilmu Ekonomi Indonesia' => 'STIESIA',
+    ];
+    foreach ($manual as $needle => $short) {
+        if (mb_stripos($label, $needle) !== false) {
+            return $short;
+        }
+    }
+    return '';
 }
 
 function rsm_log(?int $reportId, string $area, string $role, string $action, ?string $oldStatus = null, ?string $newStatus = null, ?string $note = null): void
@@ -1201,6 +1866,12 @@ function rsm_create_report(string $area, string $role, string $type): int
     $staffRow = rsm_find_staff($staff, $wilayah);
     $campusRow = rsm_find_campus($unit);
 
+    $title = rsm_input('title', rsm_input('campaign_name', rsm_input('category', 'Laporan RSM')));
+    $campaignName = rsm_input('campaign_name');
+    if ($type === 'ads' && $campaignName === '') {
+        $title = '-';
+    }
+
     $data = [
         'area' => $area,
         'report_type' => $type,
@@ -1213,7 +1884,7 @@ function rsm_create_report(string $area, string $role, string $type): int
         'created_by_name' => $actor['name'],
         'created_by_role' => $actor['role'],
         'status' => $status !== '' ? $status : 'Draft',
-        'title' => rsm_input('title', rsm_input('campaign_name', rsm_input('category', 'Laporan RSM'))),
+        'title' => $title,
         'activity_kind' => rsm_input('activity_kind'),
         'location_name' => rsm_input('location_name'),
         'target_text' => rsm_input('target_text'),
@@ -1221,7 +1892,8 @@ function rsm_create_report(string $area, string $role, string $type): int
         'leads_count' => (int) rsm_number_input('leads_count'),
         'notes' => rsm_input('notes'),
         'platform' => rsm_input('platform'),
-        'campaign_name' => rsm_input('campaign_name'),
+        'ad_period' => rsm_input('ad_period', rsm_default_ad_period($date !== '' ? $date : date('Y-m-d'))),
+        'campaign_name' => $campaignName,
         'ad_goal' => rsm_input('ad_goal'),
         'budget_requested' => rsm_number_input('budget_requested'),
         'budget_approved' => rsm_number_input('budget_approved'),
@@ -1232,6 +1904,17 @@ function rsm_create_report(string $area, string $role, string $type): int
         'obstacle_text' => rsm_input('obstacle_text'),
         'follow_up_text' => rsm_input('follow_up_text'),
     ];
+    if ($type === 'ads') {
+        if ($role !== 'koordinator') {
+            throw new RuntimeException('Laporan iklan diajukan oleh Koordinator Wilayah.');
+        }
+        $data['status'] = 'Pengajuan';
+        if (trim((string) $data['ad_period']) === '') {
+            $data['ad_period'] = rsm_default_ad_period((string) $data['report_date']);
+        }
+        $data['budget_approved'] = 0.0;
+        rsm_validate_ad_budget_request($area, $data);
+    }
 
     $columns = array_keys($data);
     $placeholders = implode(', ', array_fill(0, count($columns), '?'));
@@ -1267,6 +1950,468 @@ function rsm_find_staff(string $name, string $regional): ?array
     $stmt->execute([$name, $regional, $regional]);
     $row = $stmt->fetch();
     return $row ?: null;
+}
+
+function rsm_save_ad_budget_limit(string $area, array $actor): void
+{
+    if (!rsm_can_manage_ad_budget($actor)) {
+        throw new RuntimeException('Hanya Senior Manager yang bisa menetapkan plafon anggaran iklan.');
+    }
+
+    $period = trim(rsm_input('ad_period', rsm_default_ad_period(date('Y-m-d'))));
+    $wilayah = trim(rsm_input('wilayah'));
+    $budget = rsm_number_input('budget_limit');
+    $notes = rsm_input('notes');
+
+    if ($period === '' || $wilayah === '') {
+        throw new RuntimeException('Periode dan regional wajib diisi.');
+    }
+    if ($budget <= 0) {
+        throw new RuntimeException('Besaran anggaran regional harus lebih dari 0.');
+    }
+
+    $stmt = rsm_pdo()->prepare(
+        'INSERT INTO rsm_ad_budget_limits
+            (area, ad_period, wilayah, budget_limit, notes, created_by_user_id, created_by_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+            budget_limit = VALUES(budget_limit),
+            notes = VALUES(notes),
+            created_by_user_id = VALUES(created_by_user_id),
+            created_by_name = VALUES(created_by_name),
+            updated_at = NOW()'
+    );
+    $stmt->execute([
+        $area,
+        $period,
+        $wilayah,
+        $budget,
+        $notes,
+        $actor['id'] ?? null,
+        $actor['name'] ?? '',
+    ]);
+}
+
+function rsm_ad_budget_limit(string $area, string $period, string $wilayah): ?array
+{
+    $stmt = rsm_pdo()->prepare('SELECT * FROM rsm_ad_budget_limits WHERE area = ? AND ad_period = ? AND wilayah = ? LIMIT 1');
+    $stmt->execute([$area, $period, $wilayah]);
+    $row = $stmt->fetch();
+    return $row ?: null;
+}
+
+function rsm_ad_budget_used(string $area, string $period, string $wilayah): float
+{
+    $stmt = rsm_pdo()->prepare(
+        "SELECT COALESCE(SUM(budget_requested), 0) AS used_total
+         FROM rsm_reports
+         WHERE area = ?
+           AND report_type = 'ads'
+           AND ad_period = ?
+           AND wilayah = ?
+           AND LOWER(status) <> 'ditolak'"
+    );
+    $stmt->execute([$area, $period, $wilayah]);
+    return (float) ($stmt->fetchColumn() ?: 0);
+}
+
+function rsm_validate_ad_budget_request(string $area, array $data): void
+{
+    $period = trim((string) ($data['ad_period'] ?? ''));
+    $wilayah = trim((string) ($data['wilayah'] ?? ''));
+    $requested = (float) ($data['budget_requested'] ?? 0);
+    if ($requested <= 0) {
+        throw new RuntimeException('Anggaran diajukan wajib diisi.');
+    }
+
+    $limit = rsm_ad_budget_limit($area, $period, $wilayah);
+    if (!$limit || (float) ($limit['budget_limit'] ?? 0) <= 0) {
+        throw new RuntimeException('Plafon anggaran untuk ' . $wilayah . ' periode ' . $period . ' belum ditetapkan Senior Manager.');
+    }
+
+    $used = rsm_ad_budget_used($area, $period, $wilayah);
+    $remaining = (float) $limit['budget_limit'] - $used;
+    if ($requested > $remaining + 0.0001) {
+        throw new RuntimeException('Pengajuan melebihi sisa plafon ' . $wilayah . ' periode ' . $period . '. Sisa saat ini Rp ' . number_format($remaining, 0, ',', '.') . '.');
+    }
+}
+
+function rsm_ad_budget_summaries(string $area, string $period, ?array $user = null): array
+{
+    $where = ['l.area = ?', 'l.ad_period = ?'];
+    $params = [$area, $period];
+    if ($user && (string) ($user['role'] ?? '') === 'koordinator' && (string) ($user['regional'] ?? '') !== '') {
+        $where[] = 'l.wilayah = ?';
+        $params[] = (string) $user['regional'];
+    }
+
+    $stmt = rsm_pdo()->prepare(
+        'SELECT l.*
+         FROM rsm_ad_budget_limits l
+         WHERE ' . implode(' AND ', $where) . '
+         ORDER BY FIELD(l.wilayah, "Regional 4", "Regional 5", "Regional 6", "Regional 7"), l.wilayah'
+    );
+    $stmt->execute($params);
+    $limits = $stmt->fetchAll();
+
+    $result = [];
+    foreach ($limits as $limit) {
+        $wilayah = (string) ($limit['wilayah'] ?? '');
+        $usedStmt = rsm_pdo()->prepare(
+            "SELECT
+                COALESCE(SUM(budget_requested), 0) AS requested,
+                COALESCE(SUM(budget_approved), 0) AS approved,
+                COALESCE(SUM(realization_amount), 0) AS realization,
+                COUNT(*) AS reports_count
+             FROM rsm_reports
+             WHERE area = ?
+               AND report_type = 'ads'
+               AND ad_period = ?
+               AND wilayah = ?
+               AND LOWER(status) <> 'ditolak'"
+        );
+        $usedStmt->execute([$area, $period, $wilayah]);
+        $used = $usedStmt->fetch() ?: [];
+        $budgetLimit = (float) ($limit['budget_limit'] ?? 0);
+        $requested = (float) ($used['requested'] ?? 0);
+        $result[] = [
+            'wilayah' => $wilayah,
+            'ad_period' => (string) ($limit['ad_period'] ?? $period),
+            'budget_limit' => $budgetLimit,
+            'requested' => $requested,
+            'approved' => (float) ($used['approved'] ?? 0),
+            'realization' => (float) ($used['realization'] ?? 0),
+            'remaining' => $budgetLimit - $requested,
+            'reports_count' => (int) ($used['reports_count'] ?? 0),
+            'notes' => (string) ($limit['notes'] ?? ''),
+        ];
+    }
+
+    return $result;
+}
+
+function rsm_social_scope_sql(?array $user, string $alias = 'a'): array
+{
+    if (!$user) {
+        return ['', []];
+    }
+    $prefix = $alias !== '' ? $alias . '.' : '';
+    $role = (string) ($user['role'] ?? '');
+    if (in_array($role, ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
+        return ['', []];
+    }
+    if ($role === 'koordinator' && (string) ($user['regional'] ?? '') !== '') {
+        return [" AND {$prefix}wilayah = ?", [(string) $user['regional']]];
+    }
+    if ($role === 'staff') {
+        $sql = " AND {$prefix}wilayah = ?";
+        $params = [(string) ($user['regional'] ?? '')];
+        if ((string) ($user['campus_name'] ?? '') !== '') {
+            $sql .= " AND {$prefix}unit_name = ?";
+            $params[] = rsm_campus_canonical_label((string) $user['campus_name']);
+        }
+        return [$sql, $params];
+    }
+
+    return [' AND 1 = 0', []];
+}
+
+function rsm_social_content_score(string $mediaType, string $caption): array
+{
+    $base = ['feed' => 10, 'reels' => 15, 'story' => 5][$mediaType] ?? 0;
+    $keywords = ['pmb', 'kelas karyawan', 'rpl', 'kuliah', 'pendaftaran', 'mahasiswa baru'];
+    $captionLower = mb_strtolower($caption);
+    $matched = false;
+    foreach ($keywords as $keyword) {
+        if ($keyword !== '' && str_contains($captionLower, $keyword)) {
+            $matched = true;
+            break;
+        }
+    }
+
+    return ['score' => $base + ($matched ? 5 : 0), 'keyword_match' => $matched ? 1 : 0];
+}
+
+function rsm_save_social_account(string $area, array $actor): void
+{
+    if (!in_array((string) ($actor['role'] ?? ''), ['super_user', 'executive_director', 'director', 'senior', 'mentor', 'koordinator', 'staff'], true)) {
+        throw new RuntimeException('Akses monitoring konten tidak tersedia.');
+    }
+
+    $wilayah = trim(rsm_input('wilayah', (string) ($actor['regional'] ?? '')));
+    $unitName = rsm_campus_canonical_label(trim(rsm_input('unit_name', (string) ($actor['campus_name'] ?? ''))));
+    $username = trim((string) preg_replace('/^@+/', '', rsm_input('instagram_username')));
+    if ($wilayah === '' || $unitName === '' || $username === '') {
+        throw new RuntimeException('Regional, kampus, dan username Instagram wajib diisi.');
+    }
+    if ((string) ($actor['role'] ?? '') === 'koordinator' && (string) ($actor['regional'] ?? '') !== '' && $wilayah !== (string) $actor['regional']) {
+        throw new RuntimeException('Koordinator hanya bisa mengelola akun konten regionalnya.');
+    }
+    if ((string) ($actor['role'] ?? '') === 'staff' && (string) ($actor['campus_name'] ?? '') !== '' && strcasecmp($unitName, rsm_campus_canonical_label((string) $actor['campus_name'])) !== 0) {
+        throw new RuntimeException('Staff hanya bisa mengelola akun konten kampusnya.');
+    }
+
+    $stmt = rsm_pdo()->prepare(
+        'INSERT INTO rsm_social_accounts
+            (area, wilayah, unit_name, instagram_username, instagram_business_id, pic_name, pic_phone, connection_status, notes, created_by_user_id, created_by_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+            wilayah = VALUES(wilayah),
+            instagram_business_id = VALUES(instagram_business_id),
+            pic_name = VALUES(pic_name),
+            pic_phone = VALUES(pic_phone),
+            connection_status = VALUES(connection_status),
+            notes = VALUES(notes),
+            is_active = 1,
+            updated_at = NOW()'
+    );
+    $stmt->execute([
+        $area,
+        $wilayah,
+        $unitName,
+        $username,
+        rsm_input('instagram_business_id'),
+        rsm_input('pic_name', (string) ($actor['name'] ?? '')),
+        rsm_input('pic_phone'),
+        rsm_input('connection_status', 'Manual'),
+        rsm_input('notes'),
+        $actor['id'] ?? null,
+        $actor['name'] ?? '',
+    ]);
+}
+
+function rsm_social_accounts(string $area, ?array $user = null): array
+{
+    $sql = 'SELECT * FROM rsm_social_accounts a WHERE a.area = ? AND a.is_active = 1';
+    $params = [$area];
+    [$scopeSql, $scopeParams] = rsm_social_scope_sql($user, 'a');
+    $sql .= $scopeSql . ' ORDER BY a.wilayah ASC, a.unit_name ASC, a.instagram_username ASC';
+    $params = array_merge($params, $scopeParams);
+    $stmt = rsm_pdo()->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll();
+}
+
+function rsm_meta_config(): array
+{
+    $config = [];
+    $path = getenv('RSM_META_CONFIG_PATH') ?: (__DIR__ . '/../source_activity/meta.php');
+    if (is_file($path)) {
+        $loaded = require $path;
+        if (is_array($loaded)) {
+            $config = $loaded;
+        }
+    }
+
+    $appId = (string) (($config['app_id'] ?? '') ?: getenv('RSM_META_APP_ID'));
+    $appSecret = (string) (($config['app_secret'] ?? '') ?: getenv('RSM_META_APP_SECRET'));
+    $redirectUri = (string) (($config['redirect_uri'] ?? '') ?: getenv('RSM_META_REDIRECT_URI'));
+    if ($redirectUri === '') {
+        $redirectUri = 'https://regionalb.online/instagram-callback.php';
+    }
+
+    return [
+        'app_id' => trim($appId),
+        'app_secret' => trim($appSecret),
+        'redirect_uri' => trim($redirectUri),
+        'graph_version' => (string) (($config['graph_version'] ?? '') ?: 'v20.0'),
+    ];
+}
+
+function rsm_meta_require_config(): array
+{
+    $config = rsm_meta_config();
+    if ($config['app_id'] === '' || $config['app_secret'] === '') {
+        throw new RuntimeException('Config Meta belum diisi. Buat file private source_activity/meta.php berisi app_id dan app_secret.');
+    }
+    return $config;
+}
+
+function rsm_meta_graph_request(string $path, array $params = []): array
+{
+    $config = rsm_meta_config();
+    $version = trim((string) ($config['graph_version'] ?? 'v20.0'), '/');
+    $url = 'https://graph.facebook.com/' . $version . '/' . ltrim($path, '/');
+    if ($params) {
+        $url .= '?' . http_build_query($params);
+    }
+
+    $curl = curl_init($url);
+    if ($curl === false) {
+        throw new RuntimeException('cURL Meta tidak tersedia.');
+    }
+    curl_setopt_array($curl, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_HTTPHEADER => ['Accept: application/json'],
+    ]);
+    $body = curl_exec($curl);
+    $httpCode = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
+    $error = curl_error($curl);
+    curl_close($curl);
+    if (!is_string($body) || $body === '') {
+        throw new RuntimeException('Meta API tidak memberi respons: ' . $error);
+    }
+    $json = json_decode($body, true);
+    if (!is_array($json)) {
+        throw new RuntimeException('Respons Meta API tidak valid.');
+    }
+    if ($httpCode >= 400 || isset($json['error'])) {
+        $message = is_array($json['error'] ?? null) ? (string) ($json['error']['message'] ?? 'Meta API error') : 'Meta API error';
+        throw new RuntimeException($message);
+    }
+    return $json;
+}
+
+function rsm_social_account_for_actor(string $area, int $accountId, array $actor): array
+{
+    foreach (rsm_social_accounts($area, $actor) as $account) {
+        if ((int) ($account['id'] ?? 0) === $accountId) {
+            return $account;
+        }
+    }
+    throw new RuntimeException('Akun kampus tidak ditemukan dalam scope Anda.');
+}
+
+function rsm_update_social_meta_connection(int $accountId, array $page, array $igAccount, string $pageToken, ?int $expiresIn = null): void
+{
+    $expiresAt = null;
+    if ($expiresIn !== null && $expiresIn > 0) {
+        $expiresAt = date('Y-m-d H:i:s', time() + $expiresIn);
+    }
+    $stmt = rsm_pdo()->prepare(
+        'UPDATE rsm_social_accounts
+         SET facebook_page_id = ?, facebook_page_token = ?, token_expires_at = ?, instagram_business_id = ?,
+             instagram_username = ?, connection_status = ?, connected_at = NOW(), updated_at = NOW()
+         WHERE id = ?'
+    );
+    $stmt->execute([
+        (string) ($page['id'] ?? ''),
+        $pageToken,
+        $expiresAt,
+        (string) ($igAccount['id'] ?? ''),
+        trim((string) preg_replace('/^@+/', '', (string) ($igAccount['username'] ?? ''))),
+        'Siap API',
+        $accountId,
+    ]);
+}
+
+function rsm_create_social_post(string $area, array $actor): void
+{
+    $accountId = (int) rsm_input('account_id');
+    $date = preg_match('/^\d{4}-\d{2}-\d{2}$/', rsm_input('post_date')) ? rsm_input('post_date') : date('Y-m-d');
+    $mediaType = strtolower(rsm_input('media_type'));
+    if (!in_array($mediaType, ['no_post', 'feed', 'reels', 'story'], true)) {
+        throw new RuntimeException('Jenis konten tidak valid.');
+    }
+
+    $account = null;
+    foreach (rsm_social_accounts($area, $actor) as $row) {
+        if ((int) ($row['id'] ?? 0) === $accountId) {
+            $account = $row;
+            break;
+        }
+    }
+    if (!$account) {
+        throw new RuntimeException('Akun Instagram kampus tidak ditemukan dalam scope Anda.');
+    }
+
+    $caption = $mediaType === 'no_post' ? rsm_input('no_post_notes') : rsm_input('caption');
+    $score = rsm_social_content_score($mediaType, $caption);
+    $postTime = $mediaType === 'no_post' ? null : rsm_input('post_time');
+    if (!preg_match('/^\d{2}:\d{2}(:\d{2})?$/', $postTime)) {
+        $postTime = null;
+    } elseif (strlen($postTime) === 5) {
+        $postTime .= ':00';
+    }
+
+    $stmt = rsm_pdo()->prepare(
+        'INSERT INTO rsm_social_posts
+            (account_id, area, post_date, media_type, post_time, caption, post_url, keyword_match, score, reach_count, like_count, comment_count, created_by_user_id, created_by_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    $stmt->execute([
+        $accountId,
+        $area,
+        $date,
+        $mediaType,
+        $postTime,
+        $caption,
+        $mediaType === 'no_post' ? '' : rsm_input('post_url'),
+        $score['keyword_match'],
+        $score['score'],
+        $mediaType === 'no_post' ? 0 : (int) rsm_number_input('reach_count'),
+        $mediaType === 'no_post' ? 0 : (int) rsm_number_input('like_count'),
+        $mediaType === 'no_post' ? 0 : (int) rsm_number_input('comment_count'),
+        $actor['id'] ?? null,
+        $actor['name'] ?? '',
+    ]);
+}
+
+function rsm_social_posts(string $area, array $filters, ?array $user = null, int $limit = 120): array
+{
+    $sql = 'SELECT p.*, a.wilayah, a.unit_name, a.instagram_username
+            FROM rsm_social_posts p
+            JOIN rsm_social_accounts a ON a.id = p.account_id
+            WHERE p.area = ?';
+    $params = [$area];
+    if (($filters['date_from'] ?? '') !== '') {
+        $sql .= ' AND p.post_date >= ?';
+        $params[] = (string) $filters['date_from'];
+    }
+    if (($filters['date_to'] ?? '') !== '') {
+        $sql .= ' AND p.post_date <= ?';
+        $params[] = (string) $filters['date_to'];
+    }
+    if (($filters['wilayah'] ?? '') !== '') {
+        $sql .= ' AND a.wilayah = ?';
+        $params[] = (string) $filters['wilayah'];
+    }
+    if (($filters['unit_name'] ?? '') !== '') {
+        $variants = rsm_campus_alias_variants((string) $filters['unit_name']);
+        $sql .= ' AND a.unit_name IN (' . implode(',', array_fill(0, count($variants), '?')) . ')';
+        $params = array_merge($params, $variants);
+    }
+    [$scopeSql, $scopeParams] = rsm_social_scope_sql($user, 'a');
+    $sql .= $scopeSql . ' ORDER BY p.post_date DESC, p.post_time DESC, p.id DESC LIMIT ' . max(1, min(500, $limit));
+    $params = array_merge($params, $scopeParams);
+    $stmt = rsm_pdo()->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll();
+}
+
+function rsm_social_summary(string $area, array $filters, ?array $user = null): array
+{
+    $accounts = rsm_social_accounts($area, $user);
+    $posts = rsm_social_posts($area, $filters, $user, 500);
+    $totals = ['accounts' => count($accounts), 'feed' => 0, 'reels' => 0, 'story' => 0, 'score' => 0, 'posted_units' => 0];
+    $units = [];
+    $regionals = [];
+    foreach ($posts as $post) {
+        $type = (string) ($post['media_type'] ?? '');
+        if (isset($totals[$type])) {
+            $totals[$type]++;
+        }
+        $score = (int) ($post['score'] ?? 0);
+        $totals['score'] += $score;
+        $unitKey = mb_strtolower((string) ($post['wilayah'] ?? '') . '|' . (string) ($post['unit_name'] ?? ''));
+        $units[$unitKey] = true;
+        $regional = (string) (($post['wilayah'] ?? '') ?: 'Tanpa Regional');
+        if (!isset($regionals[$regional])) {
+            $regionals[$regional] = ['wilayah' => $regional, 'feed' => 0, 'reels' => 0, 'story' => 0, 'score' => 0, 'posts' => 0];
+        }
+        if (isset($regionals[$regional][$type])) {
+            $regionals[$regional][$type]++;
+        }
+        $regionals[$regional]['score'] += $score;
+        $regionals[$regional]['posts']++;
+    }
+    $totals['posted_units'] = count($units);
+    uasort($regionals, static fn (array $a, array $b): int => strnatcasecmp((string) $a['wilayah'], (string) $b['wilayah']));
+
+    return ['totals' => $totals, 'regionals' => array_values($regionals), 'posts' => $posts, 'accounts' => $accounts];
 }
 
 function rsm_find_campus(string $label): ?array
@@ -1312,23 +2457,39 @@ function rsm_update_status(string $area, string $role): void
     }
 
     [$scopeSql, $scopeParams] = rsm_report_scope_sql(rsm_auth_user());
-    $stmt = rsm_pdo()->prepare('SELECT id, status, wilayah, staff_name, created_by_name FROM rsm_reports WHERE id = ? AND area = ?' . $scopeSql . ' LIMIT 1');
+    $stmt = rsm_pdo()->prepare('SELECT id, report_type, status, wilayah, staff_name, created_by_name, budget_requested, budget_approved FROM rsm_reports WHERE id = ? AND area = ?' . $scopeSql . ' LIMIT 1');
     $stmt->execute(array_merge([$id, $area], $scopeParams));
     $report = $stmt->fetch();
     if (!$report) {
         throw new RuntimeException('Laporan tidak ditemukan.');
     }
 
+    $reportType = (string) ($report['report_type'] ?? '');
     if ($role === 'staff') {
         throw new RuntimeException('Staff tidak dapat mengubah status persetujuan.');
+    }
+    if ($reportType === 'ads' && !in_array($role, ['super_user', 'executive_director', 'director', 'senior'], true)) {
+        throw new RuntimeException('Laporan iklan hanya dapat disetujui, ditolak, atau direvisi oleh Senior Manager.');
+    }
+    if ($reportType === 'ads' && !in_array($newStatus, ['Disetujui', 'Ditolak', 'Revisi'], true)) {
+        throw new RuntimeException('Status laporan iklan hanya bisa Disetujui, Ditolak, atau Revisi dari Senior Manager.');
     }
     if ($role === 'koordinator' && !in_array($newStatus, ['Diverifikasi', 'Revisi'], true)) {
         throw new RuntimeException('Koordinator hanya dapat memverifikasi atau mengembalikan revisi.');
     }
 
     $oldStatus = (string) $report['status'];
-    $stmt = rsm_pdo()->prepare('UPDATE rsm_reports SET status = ?, revision_note = ?, updated_at = NOW() WHERE id = ?');
-    $stmt->execute([$newStatus, $note !== '' ? $note : null, $id]);
+    if ($reportType === 'ads' && $newStatus === 'Disetujui') {
+        $approvedAmount = rsm_number_input('budget_approved');
+        if ($approvedAmount <= 0) {
+            $approvedAmount = (float) (($report['budget_approved'] ?? 0) ?: ($report['budget_requested'] ?? 0));
+        }
+        $stmt = rsm_pdo()->prepare('UPDATE rsm_reports SET status = ?, budget_approved = ?, revision_note = ?, updated_at = NOW() WHERE id = ?');
+        $stmt->execute([$newStatus, $approvedAmount, $note !== '' ? $note : null, $id]);
+    } else {
+        $stmt = rsm_pdo()->prepare('UPDATE rsm_reports SET status = ?, revision_note = ?, updated_at = NOW() WHERE id = ?');
+        $stmt->execute([$newStatus, $note !== '' ? $note : null, $id]);
+    }
     rsm_log($id, $area, $role, 'status_update', $oldStatus, $newStatus, $note !== '' ? $note : null);
 }
 
@@ -1357,6 +2518,8 @@ function rsm_update_report(string $area, string $role): void
     }
     $staffRow = rsm_find_staff($staff, $wilayah);
     $campusRow = rsm_find_campus($unit);
+    $postedValue = static fn (string $key, mixed $fallback = ''): string => array_key_exists($key, $_POST) ? rsm_input($key) : (string) $fallback;
+    $postedNumber = static fn (string $key, mixed $fallback = 0): float => array_key_exists($key, $_POST) ? rsm_number_input($key) : (float) $fallback;
 
     $data = [
         'report_date' => $date !== '' ? $date : date('Y-m-d'),
@@ -1365,29 +2528,59 @@ function rsm_update_report(string $area, string $role): void
         'wilayah' => $wilayah !== '' ? $wilayah : 'Belum diisi',
         'unit_name' => $unit !== '' ? $unit : 'Belum diisi',
         'staff_name' => $staff !== '' ? $staff : (string) $report['staff_name'],
-        'status' => rsm_input('status', (string) $report['status']),
-        'title' => rsm_input('title', rsm_input('campaign_name', rsm_input('category', (string) $report['title']))),
-        'activity_kind' => rsm_input('activity_kind'),
-        'location_name' => rsm_input('location_name'),
-        'target_text' => rsm_input('target_text'),
-        'result_text' => rsm_input('result_text'),
-        'leads_count' => (int) rsm_number_input('leads_count'),
-        'notes' => rsm_input('notes'),
-        'platform' => rsm_input('platform'),
-        'campaign_name' => rsm_input('campaign_name'),
-        'ad_goal' => rsm_input('ad_goal'),
-        'budget_requested' => rsm_number_input('budget_requested'),
-        'budget_approved' => rsm_number_input('budget_approved'),
-        'realization_amount' => rsm_number_input('realization_amount'),
-        'cpl' => rsm_number_input('cpl'),
-        'campaign_link' => rsm_input('campaign_link'),
-        'category' => rsm_input('category'),
-        'obstacle_text' => rsm_input('obstacle_text'),
-        'follow_up_text' => rsm_input('follow_up_text'),
+        'status' => $postedValue('status', (string) $report['status']),
+        'title' => $postedValue('title', $postedValue('campaign_name', $postedValue('category', (string) $report['title']))),
+        'activity_kind' => $postedValue('activity_kind', (string) ($report['activity_kind'] ?? '')),
+        'location_name' => $postedValue('location_name', (string) ($report['location_name'] ?? '')),
+        'target_text' => $postedValue('target_text', (string) ($report['target_text'] ?? '')),
+        'result_text' => $postedValue('result_text', (string) ($report['result_text'] ?? '')),
+        'leads_count' => (int) $postedNumber('leads_count', $report['leads_count'] ?? 0),
+        'notes' => $postedValue('notes', (string) ($report['notes'] ?? '')),
+        'platform' => $postedValue('platform', (string) ($report['platform'] ?? '')),
+        'ad_period' => $postedValue('ad_period', (string) (($report['ad_period'] ?? '') ?: rsm_default_ad_period((string) ($report['report_date'] ?? '')))),
+        'campaign_name' => $postedValue('campaign_name', (string) ($report['campaign_name'] ?? '')),
+        'ad_goal' => $postedValue('ad_goal', (string) ($report['ad_goal'] ?? '')),
+        'budget_requested' => $postedNumber('budget_requested', $report['budget_requested'] ?? 0),
+        'budget_approved' => $postedNumber('budget_approved', $report['budget_approved'] ?? 0),
+        'realization_amount' => $postedNumber('realization_amount', $report['realization_amount'] ?? 0),
+        'cpl' => $postedNumber('cpl', $report['cpl'] ?? 0),
+        'campaign_link' => $postedValue('campaign_link', (string) ($report['campaign_link'] ?? '')),
+        'category' => $postedValue('category', (string) ($report['category'] ?? '')),
+        'obstacle_text' => $postedValue('obstacle_text', (string) ($report['obstacle_text'] ?? '')),
+        'follow_up_text' => $postedValue('follow_up_text', (string) ($report['follow_up_text'] ?? '')),
     ];
+    if (($report['report_type'] ?? '') === 'ads' && $role === 'staff') {
+        $data['report_date'] = (string) $report['report_date'];
+        $data['user_id'] = $authUser['id'] ?? $report['user_id'];
+        $data['partner_campus_id'] = $report['partner_campus_id'];
+        $data['wilayah'] = (string) $report['wilayah'];
+        $data['unit_name'] = (string) $report['unit_name'];
+        $data['staff_name'] = (string) (($authUser['name'] ?? '') ?: $report['staff_name']);
+        $data['status'] = 'Dilaporkan Unit';
+        $data['platform'] = (string) ($report['platform'] ?? '');
+        $data['ad_period'] = (string) (($report['ad_period'] ?? '') ?: rsm_default_ad_period((string) ($report['report_date'] ?? '')));
+        $data['budget_requested'] = (float) ($report['budget_requested'] ?? 0);
+        $data['budget_approved'] = (float) ($report['budget_approved'] ?? 0);
+    } elseif (($report['report_type'] ?? '') === 'ads' && $role === 'koordinator') {
+        $data['status'] = (string) $report['status'];
+        $data['budget_approved'] = (float) ($report['budget_approved'] ?? 0);
+        $data['realization_amount'] = (float) ($report['realization_amount'] ?? 0);
+        $data['leads_count'] = (int) ($report['leads_count'] ?? 0);
+        $data['closing_count'] = (int) ($report['closing_count'] ?? 0);
+        $data['cpl'] = (float) ($report['cpl'] ?? 0);
+        if (!empty($_FILES['attachment_path']) && (int) ($_FILES['attachment_path']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE && strtolower((string) $report['status']) === 'disetujui') {
+            $data['status'] = 'Transfer / Invoice';
+        }
+    }
+    if (($report['report_type'] ?? '') === 'ads' && trim((string) ($data['ad_period'] ?? '')) === '') {
+        $data['ad_period'] = rsm_default_ad_period((string) ($data['report_date'] ?? ''));
+    }
     $attachmentPath = rsm_report_attachment_upload($id);
     if ($attachmentPath !== null) {
         $data['attachment_path'] = $attachmentPath;
+        if (($report['report_type'] ?? '') === 'ads' && in_array($role, ['super_user', 'executive_director', 'director', 'senior'], true) && strtolower((string) $report['status']) === 'disetujui') {
+            $data['status'] = 'Transfer / Invoice';
+        }
     }
 
     $assignments = implode(', ', array_map(static fn (string $column): string => "{$column} = ?", array_keys($data)));
@@ -1425,6 +2618,14 @@ function rsm_delete_report(string $area, string $role): void
 function rsm_assert_report_can_edit(array $report, string $role): void
 {
     $status = strtolower((string) ($report['status'] ?? ''));
+    if ((string) ($report['report_type'] ?? '') === 'ads') {
+        if (in_array($role, ['super_user', 'executive_director', 'director', 'senior', 'koordinator'], true)) {
+            return;
+        }
+        if ($role === 'staff' && in_array($status, ['disetujui', 'transfer / invoice', 'berjalan', 'dilaporkan unit', 'revisi'], true)) {
+            return;
+        }
+    }
     if ($role === 'koordinator' && (string) ($report['report_type'] ?? '') === 'ads') {
         return;
     }
@@ -1438,7 +2639,7 @@ function rsm_assert_report_can_edit(array $report, string $role): void
 
 function rsm_assert_report_can_delete(array $report, string $role): void
 {
-    if (in_array($role, ['senior', 'mentor'], true)) {
+    if (in_array($role, ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
         return;
     }
     if ($role === 'koordinator' && (string) ($report['report_type'] ?? '') === 'ads') {
@@ -1638,8 +2839,7 @@ function rsm_dashboard_target(string $area, array $filters, ?array $user = null)
         $params[] = trim((string) $filters['wilayah']);
     }
     if (trim((string) ($filters['unit_name'] ?? '')) !== '') {
-        $where[] = 'unit_name = ?';
-        $params[] = trim((string) $filters['unit_name']);
+        rsm_add_unit_name_filter($where, $params, 'unit_name', trim((string) $filters['unit_name']));
     }
     if (trim((string) ($filters['staff_name'] ?? '')) !== '') {
         $where[] = 'staff_name = ?';
@@ -1687,8 +2887,7 @@ function rsm_monthly_target_regional_summary(string $area, array $filters, ?arra
         $params[] = trim((string) $filters['wilayah']);
     }
     if (trim((string) ($filters['unit_name'] ?? '')) !== '') {
-        $where[] = 'unit_name = ?';
-        $params[] = trim((string) $filters['unit_name']);
+        rsm_add_unit_name_filter($where, $params, 'unit_name', trim((string) $filters['unit_name']));
     }
     if (trim((string) ($filters['staff_name'] ?? '')) !== '') {
         $where[] = 'staff_name = ?';
@@ -1721,6 +2920,313 @@ function rsm_monthly_target_regional_summary(string $area, array $filters, ?arra
     return $summary;
 }
 
+function rsm_coordinator_profiles(): array
+{
+    return [
+        'Regional 4' => ['name' => 'Hamaruddin', 'home' => 'Makassar'],
+        'Regional 5' => ['name' => 'Kundi Harto', 'home' => 'Semarang'],
+        'Regional 6' => ['name' => 'M. Nor Abidin', 'home' => 'Surabaya'],
+        'Regional 7' => ['name' => 'Nugroho Budi Santoso', 'home' => 'Banyuwangi'],
+    ];
+}
+
+function rsm_can_manage_coordinator_schedule(?array $user): bool
+{
+    return in_array((string) ($user['role'] ?? ''), ['super_user', 'executive_director', 'director', 'senior', 'mentor', 'koordinator'], true);
+}
+
+function rsm_find_rsm_user_by_name(string $name, string $regional = ''): ?array
+{
+    if (trim($name) === '') {
+        return null;
+    }
+    $stmt = rsm_pdo()->prepare(
+        "SELECT id, name, role, regional
+         FROM rsm_users
+         WHERE name = ?
+           AND (? = '' OR regional = ?)
+         ORDER BY is_active DESC, FIELD(role, 'koordinator', 'senior', 'mentor', 'staff') ASC, id ASC
+         LIMIT 1"
+    );
+    $stmt->execute([$name, $regional, $regional]);
+    $row = $stmt->fetch();
+    return $row ?: null;
+}
+
+function rsm_coordinator_schedule_filters(): array
+{
+    $month = preg_match('/^\d{4}-\d{2}$/', (string) ($_GET['month'] ?? '')) ? (string) $_GET['month'] : date('Y-m');
+    return [
+        'month' => $month,
+        'wilayah' => rsm_input('wilayah'),
+        'koordinator' => rsm_input('koordinator'),
+        'status' => rsm_input('status'),
+    ];
+}
+
+function rsm_schedule_scope_sql(?array $user, string $alias = 's'): array
+{
+    if (!$user) {
+        return ['', []];
+    }
+    $role = (string) ($user['role'] ?? '');
+    $prefix = $alias !== '' ? $alias . '.' : '';
+    if ($role === 'koordinator' && !empty($user['regional'])) {
+        return [" AND {$prefix}wilayah = ?", [(string) $user['regional']]];
+    }
+    if ($role === 'staff' && !empty($user['regional'])) {
+        return [" AND {$prefix}wilayah = ?", [(string) $user['regional']]];
+    }
+    return ['', []];
+}
+
+function rsm_schedule_visit_type(string $regional, string $unitName): string
+{
+    $name = strtolower($unitName);
+    if ($regional === 'Regional 5' && preg_match('/semarang|yogyakarta|ivet|lia|unaki|undaris|uby|ima/', $name)) {
+        return 'Fisik';
+    }
+    if ($regional === 'Regional 6' && preg_match('/surabaya|gresik|stiesia|um |uwk|uwika|unigres|ikip/', $name)) {
+        return 'Fisik';
+    }
+    if ($regional === 'Regional 7' && preg_match('/banyuwangi|jember|bali|stikom|unibabwi|ubhinus|polnas/', $name)) {
+        return 'Fisik';
+    }
+    if ($regional === 'Regional 4' && preg_match('/makassar|sulawesi|uts|patria/', $name)) {
+        return 'Fisik';
+    }
+    return 'Zoom';
+}
+
+function rsm_save_coordinator_schedule(string $area, array $actor): void
+{
+    if (!rsm_can_manage_coordinator_schedule($actor)) {
+        throw new RuntimeException('Anda tidak memiliki akses mengatur jadwal koordinator.');
+    }
+    $date = rsm_input('schedule_date');
+    $wilayah = rsm_input('wilayah');
+    $unitName = rsm_input('unit_name');
+    $visitType = rsm_input('visit_type', 'Zoom');
+    $agenda = rsm_input('agenda', 'Kunjungan monitoring PMB');
+    $status = rsm_input('status', 'Rencana');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || $wilayah === '' || $unitName === '') {
+        throw new InvalidArgumentException('Tanggal, wilayah, dan unit/kampus wajib diisi.');
+    }
+    if (!in_array($visitType, ['Fisik', 'Zoom', 'Telepon'], true)) {
+        $visitType = 'Zoom';
+    }
+    if (!in_array($status, ['Rencana', 'Dijadwalkan', 'Selesai', 'Reschedule'], true)) {
+        $status = 'Rencana';
+    }
+    if ((string) ($actor['role'] ?? '') === 'koordinator' && (string) ($actor['regional'] ?? '') !== '' && $wilayah !== (string) $actor['regional']) {
+        throw new RuntimeException('Koordinator hanya bisa mengatur jadwal regionalnya sendiri.');
+    }
+    $profiles = rsm_coordinator_profiles();
+    $profile = $profiles[$wilayah] ?? ['name' => rsm_input('koordinator_name', (string) ($actor['name'] ?? 'Koordinator')), 'home' => ''];
+    $koordinator = rsm_input('koordinator_name', (string) $profile['name']);
+    $home = (string) ($profile['home'] ?? '');
+    $user = rsm_find_rsm_user_by_name($koordinator, $wilayah);
+    $pdo = rsm_pdo();
+    $stmt = $pdo->prepare(
+        "INSERT INTO rsm_coordinator_schedules
+            (area, schedule_date, koordinator_user_id, koordinator_name, koordinator_home, wilayah, unit_name, visit_type, agenda, status, result_text, next_action, created_by_user_id, created_by_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+            visit_type = VALUES(visit_type),
+            agenda = VALUES(agenda),
+            status = VALUES(status),
+            result_text = VALUES(result_text),
+            next_action = VALUES(next_action),
+            updated_at = CURRENT_TIMESTAMP"
+    );
+    $stmt->execute([
+        $area,
+        $date,
+        $user['id'] ?? null,
+        $koordinator,
+        $home,
+        $wilayah,
+        $unitName,
+        $visitType,
+        $agenda,
+        $status,
+        rsm_input('result_text'),
+        rsm_input('next_action'),
+        $actor['id'] ?? null,
+        $actor['name'] ?? null,
+    ]);
+}
+
+function rsm_update_coordinator_schedule(string $area, array $actor): void
+{
+    if (!rsm_can_manage_coordinator_schedule($actor)) {
+        throw new RuntimeException('Anda tidak memiliki akses memperbarui jadwal koordinator.');
+    }
+    $id = (int) rsm_input('schedule_id');
+    if ($id <= 0) {
+        throw new InvalidArgumentException('Jadwal tidak ditemukan.');
+    }
+    $unitName = rsm_input('unit_name');
+    $visitType = rsm_input('visit_type', 'Zoom');
+    $agenda = rsm_input('agenda');
+    if ($unitName === '' || $agenda === '') {
+        throw new InvalidArgumentException('Unit/kampus dan agenda wajib diisi.');
+    }
+    if (!in_array($visitType, ['Fisik', 'Zoom', 'Telepon'], true)) {
+        $visitType = 'Zoom';
+    }
+    [$scopeSql, $scopeParams] = rsm_schedule_scope_sql($actor, 's');
+    $check = rsm_pdo()->prepare("SELECT s.id FROM rsm_coordinator_schedules s WHERE s.id = ? AND s.area = ? {$scopeSql} LIMIT 1");
+    $check->execute(array_merge([$id, $area], $scopeParams));
+    if (!$check->fetchColumn()) {
+        throw new RuntimeException('Jadwal tidak ditemukan atau berada di luar scope Anda.');
+    }
+    $stmt = rsm_pdo()->prepare("UPDATE rsm_coordinator_schedules SET unit_name = ?, visit_type = ?, agenda = ?, updated_at = NOW() WHERE id = ? AND area = ?");
+    $stmt->execute([$unitName, $visitType, $agenda, $id, $area]);
+}
+
+function rsm_report_coordinator_schedule(string $area, array $actor): void
+{
+    if (!rsm_can_manage_coordinator_schedule($actor)) {
+        throw new RuntimeException('Anda tidak memiliki akses melaporkan hasil kunjungan.');
+    }
+    $id = (int) rsm_input('schedule_id');
+    if ($id <= 0) {
+        throw new InvalidArgumentException('Jadwal tidak ditemukan.');
+    }
+    $status = rsm_input('status', 'Selesai');
+    if (!in_array($status, ['Rencana', 'Dijadwalkan', 'Selesai', 'Reschedule'], true)) {
+        $status = 'Selesai';
+    }
+    [$scopeSql, $scopeParams] = rsm_schedule_scope_sql($actor, 's');
+    $check = rsm_pdo()->prepare("SELECT s.id FROM rsm_coordinator_schedules s WHERE s.id = ? AND s.area = ? {$scopeSql} LIMIT 1");
+    $check->execute(array_merge([$id, $area], $scopeParams));
+    if (!$check->fetchColumn()) {
+        throw new RuntimeException('Jadwal tidak ditemukan atau berada di luar scope Anda.');
+    }
+    $attachmentPath = rsm_schedule_attachment_upload($id);
+    $data = [
+        'status' => $status,
+        'result_text' => rsm_input('result_text'),
+        'next_action' => rsm_input('next_action'),
+    ];
+    if ($attachmentPath !== null) {
+        $data['attachment_path'] = $attachmentPath;
+    }
+    $assignments = implode(', ', array_map(static fn (string $column): string => "{$column} = ?", array_keys($data)));
+    $stmt = rsm_pdo()->prepare("UPDATE rsm_coordinator_schedules SET {$assignments}, updated_at = NOW() WHERE id = ? AND area = ?");
+    $values = array_values($data);
+    $values[] = $id;
+    $values[] = $area;
+    $stmt->execute($values);
+}
+
+function rsm_delete_coordinator_schedule(string $area, array $actor): void
+{
+    if (!rsm_can_manage_coordinator_schedule($actor)) {
+        throw new RuntimeException('Anda tidak memiliki akses menghapus jadwal koordinator.');
+    }
+    $id = (int) rsm_input('schedule_id');
+    [$scopeSql, $scopeParams] = rsm_schedule_scope_sql($actor, 's');
+    $stmt = rsm_pdo()->prepare("DELETE FROM rsm_coordinator_schedules s WHERE s.id = ? AND s.area = ? {$scopeSql}");
+    $stmt->execute(array_merge([$id, $area], $scopeParams));
+}
+
+function rsm_generate_coordinator_schedule_month(string $area, array $actor): int
+{
+    if (!rsm_can_manage_coordinator_schedule($actor)) {
+        throw new RuntimeException('Anda tidak memiliki akses generate jadwal koordinator.');
+    }
+    $month = rsm_input('schedule_month', date('Y-m'));
+    if (!preg_match('/^\d{4}-\d{2}$/', $month)) {
+        $month = date('Y-m');
+    }
+    $references = rsm_reference_options($area, $actor, (string) ($actor['role'] ?? 'senior'));
+    $campusesByRegional = [];
+    foreach ((array) ($references['campuses'] ?? []) as $campus) {
+        $regional = (string) ($campus['regional'] ?? '');
+        $label = (string) ($campus['label'] ?? '');
+        if ($regional === '' || $label === '') {
+            continue;
+        }
+        $campusesByRegional[$regional][] = $label;
+    }
+    $profiles = rsm_coordinator_profiles();
+    $start = new DateTimeImmutable($month . '-01');
+    $end = $start->modify('last day of this month');
+    $inserted = 0;
+    $weekdayIndexByRegional = [];
+    for ($day = $start; $day <= $end; $day = $day->modify('+1 day')) {
+        $weekday = (int) $day->format('N');
+        foreach ($profiles as $regional => $profile) {
+            if ((string) ($actor['role'] ?? '') === 'koordinator' && (string) ($actor['regional'] ?? '') !== '' && $regional !== (string) $actor['regional']) {
+                continue;
+            }
+            $campuses = array_values(array_unique($campusesByRegional[$regional] ?? []));
+            $index = $weekdayIndexByRegional[$regional] ?? 0;
+            $isWeeklyReview = $weekday === 5 || $weekday >= 6;
+            $unitName = $isWeeklyReview
+                ? 'Rekap dan laporan mingguan ' . $regional
+                : ($campuses[$index % max(1, count($campuses))] ?? 'Kampus prioritas ' . $regional);
+            if (!$isWeeklyReview) {
+                $weekdayIndexByRegional[$regional] = $index + 1;
+            }
+            $visitType = $isWeeklyReview ? 'Zoom' : rsm_schedule_visit_type($regional, $unitName);
+            $agenda = $weekday >= 6
+                ? 'Follow up weekend, evaluasi leads, dan persiapan kunjungan pekan berikutnya'
+                : ($weekday === 5 ? 'Rekap mingguan dan follow up kendala kampus' : 'Monitoring PMB, leads, iklan, dan action plan kampus');
+            $_POST['schedule_date'] = $day->format('Y-m-d');
+            $_POST['wilayah'] = $regional;
+            $_POST['unit_name'] = $unitName;
+            $_POST['visit_type'] = $visitType;
+            $_POST['agenda'] = $agenda;
+            $_POST['status'] = 'Rencana';
+            $_POST['koordinator_name'] = (string) $profile['name'];
+            rsm_save_coordinator_schedule($area, $actor);
+            $inserted++;
+        }
+    }
+    return $inserted;
+}
+
+function rsm_coordinator_schedules(string $area, array $filters, ?array $user = null): array
+{
+    $month = preg_match('/^\d{4}-\d{2}$/', (string) ($filters['month'] ?? '')) ? (string) $filters['month'] : date('Y-m');
+    $where = ['s.area = ?', 's.schedule_date BETWEEN ? AND ?'];
+    $params = [$area, $month . '-01', date('Y-m-t', strtotime($month . '-01'))];
+    if (!empty($filters['wilayah'])) {
+        $where[] = 's.wilayah = ?';
+        $params[] = (string) $filters['wilayah'];
+    }
+    if (!empty($filters['koordinator'])) {
+        $where[] = 's.koordinator_name = ?';
+        $params[] = (string) $filters['koordinator'];
+    }
+    if (!empty($filters['status'])) {
+        $where[] = 's.status = ?';
+        $params[] = (string) $filters['status'];
+    }
+    [$scopeSql, $scopeParams] = rsm_schedule_scope_sql($user, 's');
+    $stmt = rsm_pdo()->prepare(
+        'SELECT s.* FROM rsm_coordinator_schedules s WHERE ' . implode(' AND ', $where) . $scopeSql . ' ORDER BY s.schedule_date ASC, s.wilayah ASC, s.koordinator_name ASC, s.unit_name ASC'
+    );
+    $stmt->execute(array_merge($params, $scopeParams));
+    $rows = $stmt->fetchAll();
+    $grouped = [];
+    $summary = [];
+    foreach ($rows as $row) {
+        $regional = (string) ($row['wilayah'] ?? 'Tanpa Regional');
+        $grouped[$regional][] = $row;
+        $summary[$regional] ??= ['total' => 0, 'Fisik' => 0, 'Zoom' => 0, 'Telepon' => 0, 'Selesai' => 0];
+        $summary[$regional]['total']++;
+        $summary[$regional][(string) ($row['visit_type'] ?? 'Zoom')] = ($summary[$regional][(string) ($row['visit_type'] ?? 'Zoom')] ?? 0) + 1;
+        if (($row['status'] ?? '') === 'Selesai') {
+            $summary[$regional]['Selesai']++;
+        }
+    }
+    return ['rows' => $rows, 'grouped' => $grouped, 'summary' => $summary, 'month' => $month];
+}
+
 function rsm_handle_post(string $area, string $role): ?string
 {
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
@@ -1750,12 +3256,49 @@ function rsm_handle_post(string $area, string $role): ?string
         if (!rsm_can_sync_collab(rsm_admin_actor())) {
             throw new RuntimeException('Hanya Senior Manager atau Mentor yang bisa generate bahan WhatsApp.');
         }
-        rsm_generate_achievement_whatsapp_artifact($area);
+        try {
+            rsm_collab_sync_cache();
+        } catch (Throwable) {
+            // Tetap generate dari cache terakhir jika sumber Collab sedang lambat/tidak merespons.
+        }
+        $GLOBALS['rsm_last_whatsapp_artifact'] = rsm_generate_achievement_whatsapp_artifact($area, null, rsm_admin_actor());
         return 'Bahan WhatsApp pencapaian terbaru berhasil dibuat.';
     }
     if ($action === 'save_monthly_target') {
         rsm_save_monthly_target($area, $actor);
         return 'Target pencapaian bulanan berhasil disimpan.';
+    }
+    if ($action === 'save_ad_budget_limit') {
+        rsm_save_ad_budget_limit($area, $actor);
+        return 'Plafon anggaran iklan regional berhasil disimpan.';
+    }
+    if ($action === 'generate_coordinator_schedule') {
+        $count = rsm_generate_coordinator_schedule_month($area, $actor);
+        return 'Jadwal koordinator berhasil digenerate untuk bulan aktif (' . number_format($count, 0, ',', '.') . ' agenda).';
+    }
+    if ($action === 'save_coordinator_schedule') {
+        rsm_save_coordinator_schedule($area, $actor);
+        return 'Jadwal koordinator berhasil disimpan.';
+    }
+    if ($action === 'update_coordinator_schedule') {
+        rsm_update_coordinator_schedule($area, $actor);
+        return 'Jadwal koordinator berhasil diperbarui.';
+    }
+    if ($action === 'report_coordinator_schedule') {
+        rsm_report_coordinator_schedule($area, $actor);
+        return 'Laporan hasil kunjungan berhasil disimpan.';
+    }
+    if ($action === 'delete_coordinator_schedule') {
+        rsm_delete_coordinator_schedule($area, $actor);
+        return 'Jadwal koordinator berhasil dihapus.';
+    }
+    if ($action === 'save_social_account') {
+        rsm_save_social_account($area, $actor);
+        return 'Akun Instagram kampus berhasil disimpan.';
+    }
+    if ($action === 'create_social_post') {
+        rsm_create_social_post($area, $actor);
+        return 'Posting konten kampus berhasil dicatat.';
     }
     if ($action === 'admin_create_user') {
         rsm_admin_save_user($area, $actor);
@@ -1788,7 +3331,7 @@ function rsm_handle_post(string $area, string $role): ?string
     if ($action === 'create_ads') {
         $reportId = rsm_create_report($area, $role, 'ads');
         $importedRows = rsm_import_ad_leads($reportId, $area, $role);
-        return 'Laporan anggaran iklan berhasil disimpan ke database.' . ($importedRows > 0 ? " Data hasil iklan terimpor {$importedRows} baris." : '');
+        return 'Laporan anggaran iklan berhasil dikirim. Hubungi Senior Manager untuk approval.' . ($importedRows > 0 ? " Data hasil iklan terimpor {$importedRows} baris." : '');
     }
     if ($action === 'create_other') {
         rsm_create_report($area, $role, 'other');
@@ -1940,7 +3483,7 @@ function rsm_report_scope_sql(?array $user, string $alias = ''): array
 
     $prefix = $alias !== '' ? $alias . '.' : '';
     $actualRole = (string) ($user['role'] ?? '');
-    if (in_array($actualRole, ['senior', 'mentor'], true)) {
+    if (in_array($actualRole, ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
         return ['', []];
     }
 
@@ -1949,7 +3492,7 @@ function rsm_report_scope_sql(?array $user, string $alias = ''): array
     }
 
     if ($actualRole === 'staff') {
-        $clauses = ["({$prefix}staff_name = ? OR {$prefix}created_by_name = ?)"];
+        $clauses = ["({$prefix}staff_name = ? OR {$prefix}created_by_name = ? OR {$prefix}report_type = 'ads')"];
         $params = [(string) ($user['name'] ?? ''), (string) ($user['name'] ?? '')];
 
         if (!empty($user['regional'])) {
@@ -1982,18 +3525,19 @@ function rsm_report_scope_sql(?array $user, string $alias = ''): array
     return [' AND 1 = 0', []];
 }
 
-function rsm_reports(string $area, ?string $type = null, int $limit = 50, ?array $user = null): array
+function rsm_reports(string $area, ?string $type = null, int $limit = 50, ?array $user = null, array $filters = []): array
 {
-    $sql = 'SELECT * FROM rsm_reports WHERE area = ?';
+    $sql = 'SELECT * FROM rsm_reports r WHERE r.area = ?';
     $params = [$area];
     if ($type !== null) {
-        $sql .= ' AND report_type = ?';
+        $sql .= ' AND r.report_type = ?';
         $params[] = $type;
     }
-    [$scopeSql, $scopeParams] = rsm_report_scope_sql($user);
-    $sql .= $scopeSql;
-    $params = array_merge($params, $scopeParams);
-    $sql .= ' ORDER BY report_date DESC, id DESC LIMIT ' . max(1, min(200, $limit));
+    [$filterSql, $filterParams] = rsm_dashboard_filter_sql($filters, 'r');
+    [$scopeSql, $scopeParams] = rsm_report_scope_sql($user, 'r');
+    $sql .= $filterSql . $scopeSql;
+    $params = array_merge($params, $filterParams, $scopeParams);
+    $sql .= ' ORDER BY r.report_date DESC, r.id DESC LIMIT ' . max(1, min(500, $limit));
     $stmt = rsm_pdo()->prepare($sql);
     $stmt->execute($params);
     return $stmt->fetchAll();
@@ -2258,7 +3802,7 @@ function rsm_parse_ad_lead_xlsx(string $path): array
         }
         if ($cells !== []) {
             ksort($cells);
-            $rows[] = array_values($cells);
+            $rows[] = rsm_preserve_blank_cells($cells);
         }
     }
 
@@ -2314,11 +3858,26 @@ function rsm_parse_ad_lead_spreadsheet_xml(string $content): array
         }
         if ($cells !== []) {
             ksort($cells);
-            $tableRows[] = array_values($cells);
+            $tableRows[] = rsm_preserve_blank_cells($cells);
         }
     }
 
     return rsm_map_ad_lead_rows($tableRows);
+}
+
+function rsm_preserve_blank_cells(array $cells): array
+{
+    if ($cells === []) {
+        return [];
+    }
+
+    $maxIndex = max(array_map('intval', array_keys($cells)));
+    $row = [];
+    for ($index = 0; $index <= $maxIndex; $index++) {
+        $row[] = trim((string) ($cells[$index] ?? ''));
+    }
+
+    return $row;
 }
 
 function rsm_parse_ad_lead_html_table(string $content): array
@@ -2423,7 +3982,7 @@ function rsm_dashboard_filters_from_request(array $input): array
     $page = strtolower(trim((string) ($input['page'] ?? 'dashboard')));
 
     if ($dateFrom === '' && $dateTo === '') {
-        $dateFrom = $page === 'dashboard' ? date('Y-m-01') : date('Y-m-d');
+        $dateFrom = in_array($page, ['dashboard', 'anggaran'], true) ? date('Y-m-01') : date('Y-m-d');
         $dateTo = date('Y-m-d');
     } elseif ($dateFrom !== '' && $dateTo === '') {
         $dateTo = $dateFrom;
@@ -2477,6 +4036,14 @@ function rsm_dashboard_filter_sql(array $filters, string $alias = 'r'): array
     }
     foreach (['wilayah', 'unit_name', 'staff_name', 'platform', 'status'] as $field) {
         if (($filters[$field] ?? '') !== '') {
+            if ($field === 'unit_name') {
+                $variants = rsm_campus_alias_variants((string) $filters[$field]);
+                $sql .= " AND {$prefix}{$field} IN (" . implode(',', array_fill(0, count($variants), '?')) . ")";
+                foreach ($variants as $variant) {
+                    $params[] = $variant;
+                }
+                continue;
+            }
             $sql .= " AND {$prefix}{$field} = ?";
             $params[] = (string) $filters[$field];
         }
@@ -3077,12 +4644,22 @@ function rsm_wib_timestamp(?string $value = null): string
         $timezone = new DateTimeZone('Asia/Jakarta');
         $date = $value === null || trim($value) === ''
             ? new DateTimeImmutable('now', $timezone)
-            : new DateTimeImmutable($value);
+            : new DateTimeImmutable($value, $timezone);
 
         return $date->setTimezone($timezone)->format('Y-m-d H:i:s');
     } catch (Exception $exception) {
-        return $value ?? '';
+        return (new DateTimeImmutable('now', new DateTimeZone('Asia/Jakarta')))->format('Y-m-d H:i:s');
     }
+}
+
+function rsm_wib_datetime_label(?string $value = null): string
+{
+    return rsm_wib_timestamp($value) . ' WIB';
+}
+
+function rsm_wib_time_label(?string $value = null): string
+{
+    return substr(rsm_wib_timestamp($value), 11, 8) . ' WIB';
 }
 
 function rsm_collab_auth_credentials(): array
@@ -3763,9 +5340,10 @@ function rsm_achievement_whatsapp_default_filters(): array
     ]);
 }
 
-function rsm_achievement_whatsapp_payload(string $area, ?array $filters = null, ?array $authUser = null): array
+function rsm_achievement_whatsapp_payload(string $area, ?array $filters = null, ?array $authUser = null, ?string $generatedAt = null): array
 {
     $filters = $filters ?: rsm_achievement_whatsapp_default_filters();
+    $generatedAt = rsm_wib_timestamp($generatedAt);
     $achievement = rsm_collab_staff_performance($area, $filters, $authUser);
     $campusAchievement = rsm_collab_campus_totals($filters, $area, $authUser);
     $campusMeta = $campusAchievement['__meta'] ?? [];
@@ -3797,7 +5375,7 @@ function rsm_achievement_whatsapp_payload(string $area, ?array $filters = null, 
         if ($actualRole === 'staff') {
             $userName = mb_strtolower(trim((string) ($user['name'] ?? '')));
             $userNik = mb_strtolower(trim((string) ($user['nik'] ?? '')));
-            if ($role !== 'senior' && $role !== 'mentor' && $userName !== $authName && ($authNik === '' || $userNik !== $authNik)) {
+            if (!in_array($role, ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true) && $userName !== $authName && ($authNik === '' || $userNik !== $authNik)) {
                 continue;
             }
         }
@@ -3809,11 +5387,11 @@ function rsm_achievement_whatsapp_payload(string $area, ?array $filters = null, 
         if ($nikKey !== '') {
             $usersByNik[$nikKey] = $user;
         }
-        if ($role === 'senior' && !$senior) {
+        if (in_array($role, ['super_user', 'executive_director', 'director', 'senior'], true) && !$senior) {
             $senior = $user;
         }
         if ($role === 'koordinator') {
-            $coordinators[(string) (($user['regional'] ?? '') ?: 'Tanpa Regional')][] = $user;
+            rsm_add_unique_coordinator($coordinators, (string) (($user['regional'] ?? '') ?: 'Tanpa Regional'), $user);
         }
     }
 
@@ -3838,7 +5416,8 @@ function rsm_achievement_whatsapp_payload(string $area, ?array $filters = null, 
         if ($regionalLookup !== [] && !isset($regionalLookup[mb_strtolower($regional)])) {
             continue;
         }
-        $unit = (string) (($staffUser['campus_name'] ?? '') ?: 'Unit belum diatur');
+        $rawUnit = (string) ($staffUser['campus_name'] ?? '');
+        $unit = $rawUnit !== '' ? rsm_campus_canonical_label($rawUnit) : 'Unit belum diatur';
         if (!isset($regionalUnits[$regional][$unit])) {
             $regionalUnits[$regional][$unit] = [
                 'unit' => $unit,
@@ -3867,7 +5446,8 @@ function rsm_achievement_whatsapp_payload(string $area, ?array $filters = null, 
                 continue;
             }
             $regional = (string) (($campusRow['regional'] ?? '') ?: 'Tanpa Regional');
-            $unit = (string) (($campusRow['unit'] ?? '') ?: 'Unit belum diatur');
+            $rawUnit = (string) ($campusRow['unit'] ?? '');
+            $unit = $rawUnit !== '' ? rsm_campus_canonical_label($rawUnit) : 'Unit belum diatur';
             if ($regionalLookup !== [] && !isset($regionalLookup[mb_strtolower($regional)])) {
                 continue;
             }
@@ -3879,7 +5459,7 @@ function rsm_achievement_whatsapp_payload(string $area, ?array $filters = null, 
                     'staff' => [],
                 ];
             }
-            $regionalUnits[$regional][$unit]['registrasi'] = $registrasi;
+            $regionalUnits[$regional][$unit]['registrasi'] = max((float) ($regionalUnits[$regional][$unit]['registrasi'] ?? 0), $registrasi);
             $regionalUnits[$regional][$unit]['source'] = 'Closing Kampus Regional';
         }
     }
@@ -3908,7 +5488,6 @@ function rsm_achievement_whatsapp_payload(string $area, ?array $filters = null, 
         ];
     }
 
-    $generatedAt = rsm_wib_timestamp();
     return [
         'area' => $area,
         'generated_at' => $generatedAt,
@@ -3943,31 +5522,77 @@ function rsm_achievement_whatsapp_text(array $payload): string
 {
     $lines = ['*Laporan Pencapaian Regional B*'];
     $period = $payload['period'] ?? [];
-    $lines[] = 'Periode: ' . rsm_format_date_id((string) ($period['date_from'] ?? '')) . ' s/d ' . rsm_format_date_id((string) ($period['date_to'] ?? ''));
-    $lines[] = 'Jam generate: ' . (string) ($payload['generated_at'] ?? rsm_wib_timestamp());
+    $dateFrom = (string) ($period['date_from'] ?? '');
+    $dateTo = (string) ($period['date_to'] ?? '');
+    $periodText = $dateFrom === $dateTo || $dateTo === ''
+        ? rsm_format_date_long_id($dateFrom)
+        : rsm_format_date_long_id($dateFrom) . ' s/d ' . rsm_format_date_long_id($dateTo);
+    $lines[] = 'Periode : ' . $periodText;
+    $lines[] = 'Sinkron : ' . rsm_wib_time_label((string) ($payload['generated_at'] ?? rsm_wib_timestamp()));
+    $lines[] = '___________________________________________';
     $lines[] = '';
     $leader = $payload['leader'] ?? [];
-    $lines[] = (string) ($leader['label'] ?? 'Senior Manager') . ': ' . (string) ($leader['name'] ?? '-') . ' - ' . number_format((float) ($leader['registrasi'] ?? 0), 0, ',', '.') . ' closing';
+    $lines[] = '*' . (string) ($leader['label'] ?? 'Senior Manager') . ': ' . (string) ($leader['name'] ?? '-') . ' - ' . number_format((float) ($leader['registrasi'] ?? 0), 0, ',', '.') . ' closing*';
     $lines[] = '';
 
     foreach (($payload['regionals'] ?? []) as $regional) {
-        $lines[] = '*' . (string) ($regional['regional'] ?? '-') . '* - ' . number_format((float) ($regional['registrasi'] ?? 0), 0, ',', '.') . ' closing';
         $korwil = $regional['korwil'] ?? [];
-        $lines[] = 'Korwil: ' . (string) ($korwil['name'] ?? '-');
+        $lines[] = '*' . (string) ($regional['regional'] ?? '-') . ' - ' . (string) ($korwil['name'] ?? '-') . ' = ' . number_format((float) ($regional['registrasi'] ?? 0), 0, ',', '.') . '*';
         $units = $regional['units'] ?? [];
         if (!$units) {
             $lines[] = '- Belum ada unit closing';
         }
         foreach ($units as $unit) {
-            $lines[] = '- ' . (string) ($unit['unit'] ?? '-') . ': ' . number_format((float) ($unit['registrasi'] ?? 0), 0, ',', '.') . ' closing';
-            foreach (($unit['staff'] ?? []) as $staff) {
-                $lines[] = '  - ' . (string) ($staff['name'] ?? '-') . ': ' . number_format((float) ($staff['registrasi'] ?? 0), 0, ',', '.') . ' closing';
+            $unitClosing = (float) ($unit['registrasi'] ?? 0);
+            $staffTotal = array_sum(array_map(static fn (array $staff): float => (float) ($staff['registrasi'] ?? 0), is_array($unit['staff'] ?? null) ? $unit['staff'] : []));
+            $unitSuffix = abs($unitClosing - $staffTotal) > 0.0001 ? ' closing kampus' : '';
+            $lines[] = '> - ' . (string) ($unit['unit'] ?? '-') . ': ' . number_format($unitClosing, 0, ',', '.') . $unitSuffix;
+            if ($unitSuffix === '') {
+                foreach (($unit['staff'] ?? []) as $staff) {
+                    $staffClosing = (float) ($staff['registrasi'] ?? 0);
+                    $lines[] = '- ' . (string) ($staff['name'] ?? '-') . ': ' . number_format($staffClosing, 0, ',', '.') . ' closing staff';
+                }
             }
         }
         $lines[] = '';
     }
 
     return trim(implode("\n", $lines));
+}
+
+function rsm_format_date_long_id(string $date): string
+{
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+        return $date !== '' ? $date : '-';
+    }
+    $timestamp = strtotime($date);
+    if (!$timestamp) {
+        return $date;
+    }
+    $months = [
+        1 => 'Januari',
+        2 => 'Februari',
+        3 => 'Maret',
+        4 => 'April',
+        5 => 'Mei',
+        6 => 'Juni',
+        7 => 'Juli',
+        8 => 'Agustus',
+        9 => 'September',
+        10 => 'Oktober',
+        11 => 'November',
+        12 => 'Desember',
+    ];
+    return date('j', $timestamp) . ' ' . ($months[(int) date('n', $timestamp)] ?? date('F', $timestamp)) . ' ' . date('Y', $timestamp);
+}
+
+function rsm_time_only(string $timestamp): string
+{
+    if (preg_match('/(\d{2}:\d{2}:\d{2})/', $timestamp, $matches)) {
+        return $matches[1];
+    }
+    $time = strtotime($timestamp);
+    return $time ? date('H:i:s', $time) : date('H:i:s');
 }
 
 function rsm_format_date_id(string $date): string
@@ -3981,14 +5606,16 @@ function rsm_format_date_id(string $date): string
 
 function rsm_generate_achievement_whatsapp_artifact(string $area, ?array $filters = null, ?array $authUser = null): array
 {
-    $payload = rsm_achievement_whatsapp_payload($area, $filters, $authUser);
+    $generatedAt = rsm_wib_timestamp();
+    $payload = rsm_achievement_whatsapp_payload($area, $filters, $authUser, $generatedAt);
     $text = rsm_achievement_whatsapp_text($payload);
     $dir = rsm_achievement_whatsapp_dir();
     if (!is_dir($dir)) {
         mkdir($dir, 0775, true);
     }
 
-    $timestamp = date('Ymd-His');
+    $timestamp = preg_replace('/[^0-9]/', '', $generatedAt) ?: date('YmdHis');
+    $timestamp = substr($timestamp, 0, 8) . '-' . substr($timestamp, 8, 6);
     $base = 'pencapaian-' . strtolower(str_replace(' ', '-', $area)) . '-' . $timestamp;
     $textFile = $base . '.txt';
     $jsonFile = $base . '.json';
@@ -4104,9 +5731,9 @@ function rsm_achievement_whatsapp_image_html(array $payload): string
     $html = '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="' . rsm_html($styleHref) . '"></head><body>';
     $html .= '<main class="main">';
     $html .= '<section class="panel achievement-report-panel">';
-    $html .= '<div class="panel-head"><div><h2>Laporan Pencapaian</h2><span>Semua regional, unit yang tampil hanya yang memiliki closing</span></div></div>';
+    $html .= '<div class="panel-head"><div><h2>Laporan Pencapaian</h2><span>Regional/kampus memakai closing kampus; staff memakai closing staff</span></div></div>';
     $html .= '<div class="achievement-report">';
-    $html .= '<article class="achievement-leader">' . rsm_achievement_whatsapp_person_html($leader, (string) ($leader['label'] ?? 'Senior Manager'), (float) ($leader['registrasi'] ?? 0), true) . '</article>';
+    $html .= '<article class="achievement-leader">' . rsm_achievement_whatsapp_person_html($leader, (string) ($leader['label'] ?? 'Senior Manager'), (float) ($leader['registrasi'] ?? 0), true, 'closing kampus') . '</article>';
     $html .= '<div class="achievement-regional-grid">';
 
     for ($columnIndex = 0; $columnIndex < 2; $columnIndex++) {
@@ -4123,8 +5750,8 @@ function rsm_achievement_whatsapp_image_html(array $payload): string
 
             $html .= '<article class="achievement-regional-card ' . (!$units ? 'no-closing ' : '') . rsm_html($regionalClass) . '">';
             $html .= '<div class="achievement-regional-head">';
-            $html .= '<div class="achievement-regional-title"><span>' . rsm_html($regionalName) . '</span><strong>' . rsm_html(number_format($regionalClosing, 0, ',', '.')) . ' closing</strong></div>';
-            $html .= '<div class="achievement-korwil-list">' . rsm_achievement_whatsapp_person_html($korwil, 'Korwil', (float) ($korwil['registrasi'] ?? $regionalClosing), false) . '</div>';
+            $html .= '<div class="achievement-regional-title"><span>' . rsm_html($regionalName) . '</span><strong>' . rsm_html(number_format($regionalClosing, 0, ',', '.')) . ' closing kampus</strong></div>';
+            $html .= '<div class="achievement-korwil-list">' . rsm_achievement_whatsapp_person_html($korwil, 'Korwil', (float) ($korwil['registrasi'] ?? $regionalClosing), false, 'closing kampus') . '</div>';
             $html .= '</div>';
             $html .= '<div class="achievement-unit-list">';
             if (!$units) {
@@ -4135,12 +5762,15 @@ function rsm_achievement_whatsapp_image_html(array $payload): string
                     continue;
                 }
                 $unitClosing = (float) ($unit['registrasi'] ?? 0);
+                $staffTotal = array_sum(array_map(static fn (array $staff): float => (float) ($staff['registrasi'] ?? 0), is_array($unit['staff'] ?? null) ? $unit['staff'] : []));
                 $html .= '<div class="achievement-unit-card">';
-                $html .= '<div class="achievement-unit-title"><strong>' . rsm_html((string) ($unit['unit'] ?? '-')) . '</strong><span>' . rsm_html(number_format($unitClosing, 0, ',', '.')) . ' closing</span></div>';
+                $html .= '<div class="achievement-unit-title"><strong>' . rsm_html((string) ($unit['unit'] ?? '-')) . '</strong><span>' . rsm_html(number_format($unitClosing, 0, ',', '.')) . ' closing kampus</span></div>';
                 $html .= '<div class="achievement-staff-list">';
-                foreach (($unit['staff'] ?? []) as $staff) {
-                    if (is_array($staff)) {
-                        $html .= rsm_achievement_whatsapp_person_html($staff, 'Staff', (float) ($staff['registrasi'] ?? 0), false);
+                if (abs($unitClosing - $staffTotal) <= 0.0001) {
+                    foreach (($unit['staff'] ?? []) as $staff) {
+                        if (is_array($staff)) {
+                            $html .= rsm_achievement_whatsapp_person_html($staff, 'Staff', (float) ($staff['registrasi'] ?? 0), false, 'closing staff');
+                        }
                     }
                 }
                 $html .= '</div></div>';
@@ -4154,7 +5784,7 @@ function rsm_achievement_whatsapp_image_html(array $payload): string
     return $html;
 }
 
-function rsm_achievement_whatsapp_person_html(array $person, string $label, float $closing, bool $large = false): string
+function rsm_achievement_whatsapp_person_html(array $person, string $label, float $closing, bool $large = false, string $closingLabel = 'closing'): string
 {
     $name = (string) (($person['name'] ?? '') ?: '-');
     $initial = strtoupper(substr($name !== '' ? $name : 'U', 0, 1));
@@ -4162,7 +5792,7 @@ function rsm_achievement_whatsapp_person_html(array $person, string $label, floa
     $html = '<div class="achievement-person ' . ($large ? 'large' : '') . '">';
     $html .= '<span class="achievement-avatar">';
     $html .= $photo !== '' ? '<img src="' . rsm_html($photo) . '" alt="Foto ' . rsm_html($name) . '">' : rsm_html($initial);
-    $html .= '</span><div><small>' . rsm_html($label) . '</small><strong>' . rsm_html($name) . '</strong><em>' . rsm_html(number_format($closing, 0, ',', '.')) . ' closing</em></div></div>';
+    $html .= '</span><div><small>' . rsm_html($label) . '</small><strong>' . rsm_html($name) . '</strong><em>' . rsm_html(number_format($closing, 0, ',', '.')) . ' ' . rsm_html($closingLabel) . '</em></div></div>';
     return $html;
 }
 
@@ -4231,14 +5861,14 @@ function rsm_generate_achievement_whatsapp_image_gd(array $payload, string $dir,
     imagefill($image, 0, 0, $colors['white']);
 
     rsm_gd_text($image, 'Laporan Pencapaian', 16, 25, 18, $colors['ink'], true);
-    rsm_gd_text($image, 'Semua regional, unit yang tampil hanya yang memiliki closing', 16, 52, 14, $colors['muted'], false);
+    rsm_gd_text($image, 'Regional/kampus memakai closing kampus; staff memakai closing staff', 16, 52, 14, $colors['muted'], false);
 
     $leader = $payload['leader'] ?? [];
     rsm_gd_round_rect($image, $padding, 76, $width - $padding, 76 + $leaderHeight, 12, $colors['lightGreen'], $colors['greenLine']);
     rsm_gd_avatar($image, (string) ($leader['photo_path'] ?? ''), (string) ($leader['name'] ?? 'S'), 34, 92, 56, $colors);
     rsm_gd_text($image, strtoupper((string) ($leader['label'] ?? 'Senior Manager')), 102, 98, 11, $colors['muted'], true);
     rsm_gd_text($image, (string) ($leader['name'] ?? '-'), 102, 121, 16, $colors['ink'], true);
-    rsm_gd_text($image, number_format((float) ($leader['registrasi'] ?? 0), 0, ',', '.') . ' closing', 102, 145, 14, $colors['green'], true);
+    rsm_gd_text($image, number_format((float) ($leader['registrasi'] ?? 0), 0, ',', '.') . ' closing kampus', 102, 145, 14, $colors['green'], true);
 
     $cardWidth = (int) (($width - ($padding * 2) - $gap) / 2);
     $xPositions = [$padding, $padding + $cardWidth + $gap];
@@ -4261,7 +5891,7 @@ function rsm_generate_achievement_whatsapp_image_gd(array $payload, string $dir,
         rsm_gd_gradient_rect($image, $x + 1, $y + 1, $x + $cardWidth - 1, $y + $headerHeight, $tone['from'], $tone['to']);
         $titleY = $units ? $y + 80 : $y + 52;
         rsm_gd_text($image, strtoupper((string) ($regional['regional'] ?? '-')), $x + 18, $titleY, 12, $colors['white'], true);
-        rsm_gd_text($image, number_format((float) ($regional['registrasi'] ?? 0), 0, ',', '.') . ' closing', $x + 18, $titleY + 34, 22, $colors['white'], true);
+        rsm_gd_text($image, number_format((float) ($regional['registrasi'] ?? 0), 0, ',', '.') . ' closing kampus', $x + 18, $titleY + 34, 18, $colors['white'], true);
         $korwil = $regional['korwil'] ?? [];
         $korwilY = $units ? $y + 54 : $y + 26;
         $avatarSize = $units ? 80 : 58;
@@ -4269,7 +5899,7 @@ function rsm_generate_achievement_whatsapp_image_gd(array $payload, string $dir,
         rsm_gd_avatar($image, (string) ($korwil['photo_path'] ?? ''), (string) ($korwil['name'] ?? 'K'), $x + $cardWidth - ($units ? 330 : 280), $korwilY, $avatarSize, $colors);
         rsm_gd_text($image, 'KORWIL', $korwilTextX, $korwilY + 14, 10, $colors['white'], true);
         rsm_gd_text($image, (string) ($korwil['name'] ?? '-'), $korwilTextX, $korwilY + 38, 13, $colors['white'], true, 196);
-        rsm_gd_text($image, number_format((float) ($korwil['registrasi'] ?? $regional['registrasi'] ?? 0), 0, ',', '.') . ' closing', $korwilTextX, $korwilY + 60, 12, $colors['white'], true);
+        rsm_gd_text($image, number_format((float) ($korwil['registrasi'] ?? $regional['registrasi'] ?? 0), 0, ',', '.') . ' closing kampus', $korwilTextX, $korwilY + 60, 11, $colors['white'], true);
 
         $contentY = $y + $headerHeight + 24;
         if (!$units) {
@@ -4278,14 +5908,14 @@ function rsm_generate_achievement_whatsapp_image_gd(array $payload, string $dir,
             foreach ($units as $unit) {
                 rsm_gd_round_rect($image, $x + 16, $contentY, $x + $cardWidth - 16, $contentY + 76, 10, $colors['soft'], $colors['line']);
                 rsm_gd_text($image, (string) ($unit['unit'] ?? '-'), $x + 28, $contentY + 26, 15, $colors['ink'], true, $cardWidth - 210);
-                rsm_gd_text($image, strtoupper(number_format((float) ($unit['registrasi'] ?? 0), 0, ',', '.') . ' closing'), $x + $cardWidth - 116, $contentY + 27, 11, $colors['muted'], true);
+                rsm_gd_text($image, strtoupper(number_format((float) ($unit['registrasi'] ?? 0), 0, ',', '.') . ' closing kampus'), $x + $cardWidth - 160, $contentY + 27, 10, $colors['muted'], true);
                 $staffX = $x + 28;
                 $staffY = $contentY + 44;
                 foreach (array_slice($unit['staff'] ?? [], 0, 1) as $staff) {
                     rsm_gd_avatar($image, (string) ($staff['photo_path'] ?? ''), (string) ($staff['name'] ?? 'S'), $staffX, $staffY, 38, $colors);
                     rsm_gd_text($image, 'STAFF', $staffX + 50, $staffY + 9, 9, $colors['muted'], true);
                     rsm_gd_text($image, (string) ($staff['name'] ?? '-'), $staffX + 50, $staffY + 28, 13, $colors['ink'], true, $cardWidth - 260);
-                    rsm_gd_text($image, number_format((float) ($staff['registrasi'] ?? 0), 0, ',', '.') . ' closing', $staffX + 50, $staffY + 48, 13, $colors['green'], true);
+                    rsm_gd_text($image, number_format((float) ($staff['registrasi'] ?? 0), 0, ',', '.') . ' closing staff', $staffX + 50, $staffY + 48, 12, $colors['green'], true);
                 }
                 $contentY += $unitHeight + 12;
             }
@@ -4606,7 +6236,7 @@ function rsm_gamification_summary(string $area, array $filters, ?array $user = n
         return $row;
     }, $rows);
 
-    $staffRows = array_values(array_filter($rows, static fn (array $row): bool => !in_array((string) ($row['user_role'] ?? ''), ['senior', 'mentor', 'koordinator'], true)));
+    $staffRows = array_values(array_filter($rows, static fn (array $row): bool => !in_array((string) ($row['user_role'] ?? ''), ['super_user', 'executive_director', 'director', 'senior', 'mentor', 'koordinator'], true)));
     $aggregateBase = static function (array $user): array {
         return [
             'user_id' => (int) ($user['id'] ?? 0),
@@ -4662,7 +6292,7 @@ function rsm_gamification_summary(string $area, array $filters, ?array $user = n
             $aggregateRows[] = $aggregate;
             continue;
         }
-        if (in_array($aggregateRole, ['senior', 'mentor'], true)) {
+        if (in_array($aggregateRole, ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
             $aggregate = $aggregateBase($aggregateUser);
             $aggregate['wilayah'] = (string) (($aggregateUser['area'] ?? '') ?: $area);
             $aggregate['unit_name'] = 'Akumulasi koordinator';
@@ -4677,7 +6307,7 @@ function rsm_gamification_summary(string $area, array $filters, ?array $user = n
     $rows = array_merge($rows, $aggregateRows);
 
     usort($rows, static fn (array $a, array $b): int => ((int) $b['points'] <=> (int) $a['points']) ?: strcmp((string) $a['staff_label'], (string) $b['staff_label']));
-    $leaderboardRows = array_values(array_filter($rows, static fn (array $row): bool => !in_array((string) ($row['user_role'] ?? ''), ['senior', 'mentor', 'koordinator'], true)));
+    $leaderboardRows = array_values(array_filter($rows, static fn (array $row): bool => !in_array((string) ($row['user_role'] ?? ''), ['super_user', 'executive_director', 'director', 'senior', 'mentor', 'koordinator'], true)));
     usort($leaderboardRows, static fn (array $a, array $b): int => ((int) $b['points'] <=> (int) $a['points']) ?: strcmp((string) $a['staff_label'], (string) $b['staff_label']));
     $topRows = array_slice($leaderboardRows, 0, 5);
 

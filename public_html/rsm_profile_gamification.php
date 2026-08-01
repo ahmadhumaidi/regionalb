@@ -12,10 +12,10 @@ function rsm_profile_allowed_users(string $area, array $actor): array
     } elseif ($role === 'staff') {
         $sql .= ' AND id = ?';
         $params[] = (int) ($actor['id'] ?? 0);
-    } elseif ($role !== 'senior') {
+    } elseif (!in_array($role, ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
         $sql .= ' AND 1 = 0';
     }
-    $sql .= " ORDER BY FIELD(role, 'senior', 'koordinator', 'staff'), regional ASC, name ASC";
+    $sql .= " ORDER BY FIELD(role, 'super_user', 'executive_director', 'director', 'senior', 'mentor', 'koordinator', 'staff'), regional ASC, name ASC";
     $stmt = rsm_pdo()->prepare($sql);
     $stmt->execute($params);
     return $stmt->fetchAll();
@@ -42,7 +42,7 @@ function rsm_profile_report_filter_sql(array $target, string $alias = 'r'): arra
 {
     $prefix = $alias !== '' ? $alias . '.' : '';
     $role = (string) ($target['role'] ?? '');
-    if (in_array($role, ['senior', 'mentor'], true)) {
+    if (in_array($role, ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
         return ['', []];
     }
     if ($role === 'koordinator') {
@@ -105,13 +105,22 @@ function rsm_profile_gamification(string $area, array $actor, int $targetId = 0)
     $stats = $stmt->fetch() ?: [];
 
     $monthStart = date('Y-m-01');
-    $monthEnd = date('Y-m-t');
+    $monthEnd = date('Y-m-d');
     $monthly = rsm_profile_month_stats($area, $target, $monthStart, $monthEnd, $buckets);
     $history = rsm_profile_monthly_history($area, $target, $buckets);
     $activities = rsm_profile_recent_activities($area, $target);
     $streak = rsm_profile_streak($area, $target);
 
     $xp = rsm_profile_xp($area, $target, $buckets);
+    $aggregateRoles = ['super_user', 'executive_director', 'director', 'senior', 'mentor', 'koordinator'];
+    if (in_array((string) ($target['role'] ?? ''), $aggregateRoles, true)) {
+        $aggregate = rsm_profile_role_aggregate($area, $target, $monthStart, $monthEnd);
+        if ($aggregate !== null) {
+            $stats = array_merge($stats, $aggregate['stats']);
+            $monthly = array_merge($monthly, $aggregate['monthly']);
+            $xp = (int) $aggregate['xp'];
+        }
+    }
     $level = rsm_profile_level($xp);
     $closing = (int) ($stats['closing_total'] ?? 0);
     $leads = (int) ($stats['leads_total'] ?? 0);
@@ -179,6 +188,67 @@ function rsm_profile_xp(string $area, array $target, array $buckets): int
         $xp += (int) ($row['closing_total'] ?? 0) * 25;
     }
     return $xp;
+}
+
+function rsm_profile_role_aggregate(string $area, array $target, string $from, string $to): ?array
+{
+    $filters = [
+        'date_from' => $from,
+        'date_to' => $to,
+        'wilayah' => '',
+        'unit_name' => '',
+        'staff_name' => '',
+        'platform' => '',
+        'status' => '',
+        'month' => date('Y-m', strtotime($from)),
+    ];
+    if ((string) ($target['role'] ?? '') === 'koordinator' && (string) ($target['regional'] ?? '') !== '') {
+        $filters['wilayah'] = (string) $target['regional'];
+    }
+
+    $summary = rsm_gamification_summary($area, $filters, $target);
+    $row = is_array($summary['my_rank'] ?? null) ? $summary['my_rank'] : null;
+    if ($row === null) {
+        return null;
+    }
+
+    $reports = (int) ($row['report_total'] ?? 0);
+    $approved = (int) ($row['approved_reports'] ?? 0);
+    $leads = (int) ($row['leads_total'] ?? 0);
+    $followUp = (int) ($row['follow_up_total'] ?? 0);
+    $closing = (int) (($row['closing_for_points'] ?? null) ?? ($row['registrasi_total'] ?? 0));
+    $herreg = (int) (($row['herreg_for_points'] ?? null) ?? ($row['herregistrasi_total'] ?? 0));
+    $adsReports = (int) ($row['uploaded_ad_reports'] ?? 0);
+    $spend = (float) ($row['spend_total'] ?? 0);
+    $points = (int) ($row['points'] ?? 0);
+
+    return [
+        'xp' => $points,
+        'stats' => [
+            'total_reports' => $reports,
+            'marketing_reports' => (int) ($row['marketing_reports'] ?? 0),
+            'ads_reports' => $adsReports,
+            'other_reports' => (int) ($row['other_reports'] ?? 0),
+            'approved_reports' => $approved,
+            'rejected_reports' => 0,
+            'active_days' => (int) ($row['report_days'] ?? 0),
+            'leads_total' => $leads,
+            'follow_up_total' => $followUp,
+            'closing_total' => $closing,
+            'herregistrasi_total' => $herreg,
+            'spend_total' => $spend,
+            'approved_budget' => max($spend, 0.0),
+        ],
+        'monthly' => [
+            'reports' => $reports,
+            'marketing_reports' => (int) ($row['marketing_reports'] ?? 0),
+            'ads_reports' => $adsReports,
+            'follow_up' => $followUp,
+            'leads' => $leads,
+            'closing' => $closing,
+            'spend' => $spend,
+        ],
+    ];
 }
 
 function rsm_profile_level(int $xp): array

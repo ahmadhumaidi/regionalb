@@ -1029,14 +1029,14 @@ if ($page === 'rekap' && $dbError === null) {
                 <tbody><tr><td class="empty-row">Belum ada data tersinkron untuk sumber ini.</td></tr></tbody>
               <?php else: ?>
                 <thead>
-                  <?php $collabDataWidth = (int) ($activeReportData['column_count'] ?? 0); ?>
-                  <?php foreach (array_slice($collabRows, 0, $collabHeaderRowCount) as $row): ?>
-                    <tr>
-                      <?php foreach (array_slice((array) $row, 0, $collabDataWidth > 0 ? $collabDataWidth : null) as $cell): ?>
-                        <th><?= h((string) $cell) ?></th>
-                      <?php endforeach; ?>
-                    </tr>
-                  <?php endforeach; ?>
+                  <?php
+                    $collabDataWidth = (int) ($activeReportData['column_count'] ?? 0);
+                    $collabHeaderRows = array_map(
+                        static fn ($row): array => array_slice((array) $row, 0, $collabDataWidth > 0 ? $collabDataWidth : null),
+                        array_slice($collabRows, 0, $collabHeaderRowCount)
+                    );
+                    render_collab_header_rows($collabHeaderRows);
+                  ?>
                 </thead>
                 <tbody>
                   <?php foreach (array_slice($collabRows, $collabHeaderRowCount, null, true) as $row): ?>
@@ -1419,6 +1419,95 @@ function render_login_page(?string $error): void
     </body>
     </html>
     <?php
+}
+
+function collab_header_runs(array $row): array
+{
+    $runs = [];
+    $start = 0;
+    $count = count($row);
+    for ($i = 1; $i <= $count; $i++) {
+        if ($i === $count || $row[$i] !== $row[$start]) {
+            $runs[] = ['start' => $start, 'width' => $i - $start, 'value' => (string) $row[$start]];
+            $start = $i;
+        }
+    }
+    return $runs;
+}
+
+function render_collab_header_rows(array $headerRows): void
+{
+    $headerRows = array_values($headerRows);
+    $rowCount = count($headerRows);
+    if ($rowCount === 0) {
+        return;
+    }
+
+    if ($rowCount !== 2) {
+        foreach ($headerRows as $row) {
+            echo '<tr>';
+            foreach (collab_header_runs(array_values((array) $row)) as $runIndex => $run) {
+                $colspanAttr = $run['width'] > 1 ? ' colspan="' . $run['width'] . '"' : '';
+                $classAttr = $runIndex === 0 ? ' class="sticky-col"' : '';
+                echo '<th' . $colspanAttr . $classAttr . '>' . h($run['value']) . '</th>';
+            }
+            echo '</tr>';
+        }
+        return;
+    }
+
+    $row0 = array_values((array) $headerRows[0]);
+    $row1 = array_values((array) $headerRows[1]);
+    $skipCols = [];
+    $topCells = [];
+    foreach (collab_header_runs($row0) as $run) {
+        $sameBelow = true;
+        for ($c = $run['start']; $c < $run['start'] + $run['width']; $c++) {
+            if ((string) ($row1[$c] ?? '') !== $run['value']) {
+                $sameBelow = false;
+                break;
+            }
+        }
+        $topCells[] = ['value' => $run['value'], 'colspan' => $run['width'], 'rowspan' => $sameBelow ? 2 : 1];
+        if ($sameBelow) {
+            for ($c = $run['start']; $c < $run['start'] + $run['width']; $c++) {
+                $skipCols[$c] = true;
+            }
+        }
+    }
+
+    echo '<tr>';
+    foreach ($topCells as $cellIndex => $cell) {
+        $attrs = '';
+        if ($cell['colspan'] > 1) {
+            $attrs .= ' colspan="' . $cell['colspan'] . '"';
+        }
+        if ($cell['rowspan'] > 1) {
+            $attrs .= ' rowspan="' . $cell['rowspan'] . '"';
+        }
+        if ($cellIndex === 0) {
+            $attrs .= ' class="sticky-col"';
+        }
+        echo '<th' . $attrs . '>' . h($cell['value']) . '</th>';
+    }
+    echo '</tr>';
+
+    $bottomValues = [];
+    foreach ($row1 as $idx => $value) {
+        if (!isset($skipCols[$idx])) {
+            $bottomValues[] = $value;
+        }
+    }
+    $bottomStartsAtColumnZero = !isset($skipCols[0]);
+    if ($bottomValues !== []) {
+        echo '<tr>';
+        foreach (collab_header_runs($bottomValues) as $runIndex => $run) {
+            $colspanAttr = $run['width'] > 1 ? ' colspan="' . $run['width'] . '"' : '';
+            $classAttr = ($runIndex === 0 && $bottomStartsAtColumnZero) ? ' class="sticky-col"' : '';
+            echo '<th' . $colspanAttr . $classAttr . '>' . h($run['value']) . '</th>';
+        }
+        echo '</tr>';
+    }
 }
 
 function render_sync_health_panel(array $health): void

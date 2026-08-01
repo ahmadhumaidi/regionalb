@@ -2189,6 +2189,10 @@ tr.group-subheading span {
   box-shadow: 0 1px 0 var(--line);
 }
 
+.collab-raw-table thead tr:nth-child(2) th {
+  top: 41px;
+}
+
 .collab-raw-table tbody tr:nth-child(even) {
   background: #f8fafc;
 }
@@ -2203,13 +2207,18 @@ tr.group-subheading span {
   font-variant-numeric: tabular-nums;
 }
 
-.collab-raw-table th:first-child,
-.collab-raw-table td:first-child {
+.collab-raw-table tbody td:first-child {
   position: sticky;
   left: 0;
   z-index: 1;
   background: inherit;
   box-shadow: 1px 0 0 var(--line);
+}
+
+.collab-raw-table thead th.sticky-col {
+  left: 0;
+  z-index: 3;
+  box-shadow: 1px 1px 0 var(--line);
 }
 
 .collab-raw-table thead th:first-child {

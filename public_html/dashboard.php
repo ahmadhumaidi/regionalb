@@ -41,6 +41,7 @@ $adminMenus = [
     'targets' => 'Target Bulanan',
     'users' => 'Kelola User',
     'sumber-collab' => 'Sumber Data Collab',
+    'jadwal-personalia' => 'Jadwal',
 ];
 $pageTitles = $menus + $adminMenus + ['profile' => 'Profil Saya', 'detail' => 'Detail Laporan', 'edit' => 'Edit Laporan'];
 $pageTitles['closing-kampus'] = 'Top 5 Pencapaian Kampus';
@@ -251,6 +252,12 @@ try {
     if ($page === 'sumber-collab' && !in_array((string) ($authUser['role'] ?? ''), ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
         $page = 'dashboard';
     }
+    if ($page === 'jadwal-personalia' && !in_array((string) ($authUser['role'] ?? ''), ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
+        $page = 'dashboard';
+    }
+    if ($page === 'jadwal-koordinator' && (string) ($authUser['role'] ?? '') === 'staff') {
+        $page = 'dashboard';
+    }
     if ($page === 'campuses') {
         $page = 'dashboard';
     }
@@ -282,27 +289,27 @@ try {
     $impersonationSource = rsm_impersonation_source();
     $impersonationAdmin = $impersonationSource ?: $authUser;
     if (rsm_can_impersonate($impersonationAdmin)) {
-        $impersonationUsers = rsm_users($area);
+        $impersonationUsers = rsm_users($area, true);
     }
 
     $references = rsm_reference_options($area, $authUser, $role);
     $summary = rsm_summary($area, $authUser);
     $activities = rsm_reports($area, 'marketing', 50, $authUser);
-    $adsReportFilters = [];
-    if ($page === 'anggaran') {
-        $adsReportFilters = [
-            'date_from' => (string) ($dashboardFilters['date_from'] ?? ''),
-            'date_to' => (string) ($dashboardFilters['date_to'] ?? ''),
-        ];
-    }
-    $ads = rsm_reports($area, 'ads', $page === 'anggaran' ? 500 : 50, $authUser, $adsReportFilters);
     $adBudgetPeriodOptions = rsm_ad_period_options();
     $adBudgetPeriod = rsm_default_ad_period((string) ($dashboardFilters['date_from'] ?? date('Y-m-d')));
     $adBudgetPeriodRequested = trim((string) ($_GET['ad_period'] ?? ''));
     if ($page === 'anggaran' && $adBudgetPeriodRequested !== '' && in_array($adBudgetPeriodRequested, $adBudgetPeriodOptions, true)) {
         $adBudgetPeriod = $adBudgetPeriodRequested;
     }
+    $adsReportFilters = [];
+    if ($page === 'anggaran') {
+        $adsReportFilters = [
+            'ad_period' => $adBudgetPeriod,
+        ];
+    }
+    $ads = rsm_reports($area, 'ads', $page === 'anggaran' ? 500 : 50, $authUser, $adsReportFilters);
     $adBudgetSummaries = $page === 'anggaran' ? rsm_ad_budget_summaries($area, $adBudgetPeriod, $authUser) : [];
+    $adsPendingReports = $page === 'anggaran' ? rsm_ads_pending_reports($area, $authUser) : [];
     if ($page === 'konten') {
         $socialContent = rsm_social_summary($area, $dashboardFilters, $authUser);
     }
@@ -360,9 +367,14 @@ try {
     } elseif ($page === 'sumber-collab') {
         $collabSourceSnapshot = rsm_collab_cache_snapshot();
         $syncHealth = rsm_sync_health_status();
+    } elseif ($page === 'jadwal-personalia') {
+        $jadwalPersonaliaSnapshot = rsm_jadwal_cache_snapshot();
     } elseif ($page === 'jadwal-koordinator') {
         $coordinatorScheduleFilters = rsm_coordinator_schedule_filters();
         $coordinatorSchedules = rsm_coordinator_schedules($area, $coordinatorScheduleFilters, $authUser);
+        $coordinatorWhatsappArtifact = is_array($GLOBALS['rsm_coordinator_whatsapp_artifact'] ?? null)
+            ? $GLOBALS['rsm_coordinator_whatsapp_artifact']
+            : rsm_latest_coordinator_whatsapp_artifact();
     } elseif ($page === 'rekap') {
         $dashboardOverview = rsm_dashboard_overview($area, $dashboardFilters, $authUser);
         $staffAchievement = rsm_collab_staff_performance($area, $dashboardFilters, $authUser);
@@ -377,7 +389,7 @@ try {
         $monthlyTargets = rsm_monthly_targets($area);
     }
     if ($page === 'users' && in_array((string) ($authUser['role'] ?? ''), ['super_user', 'senior'], true)) {
-        $managedUsers = rsm_users($area);
+        $managedUsers = rsm_users($area, true);
     }
     if ($page === 'profile') {
         $profileData = rsm_profile_gamification($area, $authUser, (int) ($_GET['user_id'] ?? 0));
@@ -547,6 +559,7 @@ if ($page === 'rekap' && $dbError === null) {
       </div>
       <nav class="menu" id="sidebar-menu">
         <?php foreach ($menus as $key => $label): ?>
+          <?php if ($key === 'jadwal-koordinator' && (string) ($authUser['role'] ?? '') === 'staff') { continue; } ?>
           <a class="<?= $page === $key ? 'active' : '' ?>" href="<?= h(url_for($key, $role)) ?>"><?= h($label) ?></a>
         <?php endforeach; ?>
         <?php foreach ($adminMenus as $key => $label): ?>
@@ -559,6 +572,9 @@ if ($page === 'rekap' && $dbError === null) {
                 continue;
             }
             if ($key === 'sumber-collab' && !in_array($actualNavRole, ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
+                continue;
+            }
+            if ($key === 'jadwal-personalia' && !in_array($actualNavRole, ['super_user', 'executive_director', 'director', 'senior', 'mentor'], true)) {
                 continue;
             }
           ?>
@@ -884,7 +900,7 @@ if ($page === 'rekap' && $dbError === null) {
           <?php render_staff_achievement_table($staffAchievement['rows'] ?? []); ?>
         </section>
       <?php elseif ($page === 'jadwal-koordinator'): ?>
-        <?php render_coordinator_schedule_page($coordinatorScheduleFilters, $coordinatorSchedules, $references, $authUser, $role); ?>
+        <?php render_coordinator_schedule_page($coordinatorScheduleFilters, $coordinatorSchedules, $references, $authUser, $role, $coordinatorWhatsappArtifact); ?>
       <?php elseif ($page === 'bdc-users'): ?>
         <?php
           $bdcAllowedRegionals = rsm_area_regionals($area);
@@ -1052,6 +1068,42 @@ if ($page === 'rekap' && $dbError === null) {
             </table>
           </div>
         </section>
+      <?php elseif ($page === 'jadwal-personalia'): ?>
+        <?php
+          $jadwalZonaData = (array) ($jadwalPersonaliaSnapshot['zonas'][2] ?? []);
+          $jadwalSyncedAt = (string) ($jadwalPersonaliaSnapshot['synced_at'] ?? '');
+          $jadwalTableHtml = (string) ($jadwalZonaData['table_html'] ?? '');
+          $jadwalErrors = (array) ($jadwalPersonaliaSnapshot['last_sync_errors'] ?? $jadwalPersonaliaSnapshot['errors'] ?? []);
+        ?>
+        <?php if (rsm_can_sync_collab(rsm_admin_actor())): ?>
+          <form method="post" class="sync-action-bar">
+            <?= rsm_csrf_field() ?>
+            <input type="hidden" name="action" value="sync_jadwal_cache">
+            <button class="primary-btn">Sinkronisasi Jadwal</button>
+          </form>
+        <?php endif; ?>
+        <section class="panel collab-source-panel">
+          <div class="panel-head">
+            <div><h2>Jadwal (cb.web.id - Personalia)</h2><span>Snapshot cache terakhir tersinkron<?= $jadwalSyncedAt !== '' ? ' - ' . h($jadwalSyncedAt) . ' WIB' : ' - belum ada sinkronisasi' ?></span></div>
+          </div>
+          <?php if (!empty($jadwalErrors)): ?>
+            <div class="alert alert-danger"><?= h(implode(' - ', array_map('strval', $jadwalErrors))) ?></div>
+          <?php endif; ?>
+          <div class="meta-chips">
+            <span class="meta-chip"><b>Zona</b>2 (Regional B)</span>
+            <span class="meta-chip"><b>Diambil</b><?= h((string) (($jadwalZonaData['fetched_at'] ?? '') ?: '-')) ?></span>
+            <?php if ((string) ($jadwalZonaData['source_url'] ?? '') !== ''): ?>
+              <a class="meta-chip meta-chip-link" href="<?= h((string) $jadwalZonaData['source_url']) ?>" target="_blank" rel="noopener">Buka sumber asli &#8599;</a>
+            <?php endif; ?>
+          </div>
+          <div class="table-wrap jadwal-raw-wrap">
+            <?php if ($jadwalTableHtml === ''): ?>
+              <table class="collab-raw-table"><tbody><tr><td class="empty-row">Belum ada data tersinkron. Klik "Sinkronisasi Jadwal" di atas.</td></tr></tbody></table>
+            <?php else: ?>
+              <?= $jadwalTableHtml ?>
+            <?php endif; ?>
+          </div>
+        </section>
       <?php elseif ($page === 'konten'): ?>
         <?php $socialTotals = (array) ($socialContent['totals'] ?? []); ?>
         <section class="summary-grid five">
@@ -1143,6 +1195,7 @@ if ($page === 'rekap' && $dbError === null) {
           <article class="summary-card tone-cyan"><span>Closing iklan</span><strong><?= h(number_format((int) $adsPageTotals['closing'], 0, ',', '.')) ?></strong><small>Total dari tabel aktif</small></article>
         </section>
         <?php render_ad_budget_limit_panel($adBudgetPeriod, $adBudgetPeriodOptions, $adBudgetSummaries, $references, $authUser, $role); ?>
+        <?php render_ads_pending_report_panel($adsPendingReports, $role); ?>
         <?php if ($role === 'koordinator'): ?>
         <?php render_form_panel('Pengajuan Iklan', [
             'Tanggal', 'Periode Iklan', 'Wilayah', 'Unit/Kampus', 'Platform iklan', 'Anggaran diajukan'
@@ -1155,9 +1208,14 @@ if ($page === 'rekap' && $dbError === null) {
             <?php if (count($allowedRoleKeys) > 1): ?>
               <input type="hidden" name="role" value="<?= h($role) ?>">
             <?php endif; ?>
-            <label><span>Dari tanggal</span><input type="date" name="date_from" value="<?= h((string) $dashboardFilters['date_from']) ?>"></label>
-            <label><span>Sampai tanggal</span><input type="date" name="date_to" value="<?= h((string) $dashboardFilters['date_to']) ?>"></label>
-            <div class="filter-actions"><button class="primary-btn">Terapkan</button><a class="secondary-btn" href="<?= h(url_for('anggaran', $role)) ?>">Reset</a></div>
+            <label>
+              <span>Periode</span>
+              <select name="ad_period" onchange="this.form.submit()">
+                <?php foreach ($adBudgetPeriodOptions as $periodOption): ?>
+                  <option value="<?= h($periodOption) ?>" <?= $periodOption === $adBudgetPeriod ? 'selected' : '' ?>><?= h($periodOption) ?></option>
+                <?php endforeach; ?>
+              </select>
+            </label>
           </form>
           <?php render_ads_table($ads, $role); ?>
         </section>
@@ -1179,7 +1237,9 @@ if ($page === 'rekap' && $dbError === null) {
             </div>
           </div>
           <?php render_achievement_report($area, $staffAchievement, $achievementUsers, $authUser); ?>
-          <?php render_whatsapp_artifact_panel($whatsappArtifact); ?>
+          <?php if ($role === 'super_user'): ?>
+            <?php render_whatsapp_artifact_panel($whatsappArtifact); ?>
+          <?php endif; ?>
         </section>
         <section class="panel rekap-export-panel">
           <div class="panel-head">
@@ -1576,14 +1636,16 @@ function date_id_label(string $date): string
     return $days[(int) date('w', $timestamp)] . ', ' . date('d/m/Y', $timestamp);
 }
 
-function render_coordinator_schedule_page(array $filters, array $schedules, array $references, ?array $authUser, string $role): void
+function render_coordinator_schedule_page(array $filters, array $schedules, array $references, ?array $authUser, string $role, ?array $whatsappArtifact = null): void
 {
     $profiles = rsm_coordinator_profiles();
     $month = (string) ($filters['month'] ?? date('Y-m'));
     $canManage = rsm_can_manage_coordinator_schedule($authUser);
     $summary = (array) ($schedules['summary'] ?? []);
     $grouped = (array) ($schedules['grouped'] ?? []);
+    $checklistSummary = rsm_coordinator_checklist_summary((array) ($schedules['rows'] ?? []));
     ?>
+    <?php if ($role !== 'koordinator'): ?>
     <section class="panel">
       <div class="panel-head">
         <div>
@@ -1591,12 +1653,22 @@ function render_coordinator_schedule_page(array $filters, array $schedules, arra
           <span>Rencana kunjungan fisik dan Zoom per bulan</span>
         </div>
         <?php if ($canManage): ?>
-          <form method="post" class="inline-action-form">
-            <?= rsm_csrf_field() ?>
-            <input type="hidden" name="action" value="generate_coordinator_schedule">
-            <input type="hidden" name="schedule_month" value="<?= h($month) ?>">
-            <button class="primary-btn">Generate Bulan Ini</button>
-          </form>
+          <div class="schedule-action-buttons">
+            <form method="post" class="inline-action-form">
+              <?= rsm_csrf_field() ?>
+              <input type="hidden" name="action" value="generate_coordinator_schedule">
+              <input type="hidden" name="schedule_month" value="<?= h($month) ?>">
+              <button class="primary-btn">Generate Bulan Ini</button>
+            </form>
+            <?php if ($role === 'super_user'): ?>
+              <form method="post" class="inline-action-form">
+                <?= rsm_csrf_field() ?>
+                <input type="hidden" name="action" value="generate_coordinator_whatsapp_report">
+                <input type="hidden" name="schedule_month" value="<?= h($month) ?>">
+                <button class="secondary-btn">Generate Laporan WA</button>
+              </form>
+            <?php endif; ?>
+          </div>
         <?php endif; ?>
       </div>
       <form class="filter-bar dashboard-filter schedule-filter" method="get">
@@ -1609,25 +1681,62 @@ function render_coordinator_schedule_page(array $filters, array $schedules, arra
         <div class="filter-actions"><button class="primary-btn">Terapkan</button><a class="secondary-btn" href="<?= h(url_for('jadwal-koordinator', $role)) ?>">Reset</a></div>
       </form>
     </section>
+    <?php endif; ?>
 
     <section class="summary-grid four">
-      <?php foreach (rsm_area_regionals('Regional B') as $regional): ?>
-        <?php $row = $summary[$regional] ?? ['total' => 0, 'Fisik' => 0, 'Zoom' => 0, 'Telepon' => 0, 'Selesai' => 0]; ?>
-        <article class="summary-card tone-blue">
+      <?php $summaryRegionals = ($role === 'koordinator' && !empty($authUser['regional'])) ? [(string) $authUser['regional']] : rsm_area_regionals('Regional B'); ?>
+      <?php foreach ($summaryRegionals as $regional): ?>
+        <?php $row = $summary[$regional] ?? ['total' => 0, 'Fisik' => 0, 'Zoom' => 0, 'Telepon' => 0, 'Selesai' => 0, 'Libur' => 0]; ?>
+        <article class="summary-card <?= (int) ($row['Libur'] ?? 0) > 0 ? 'tone-amber' : 'tone-blue' ?>">
           <span><?= h($regional) ?></span>
           <strong><?= h(number_format((int) ($row['total'] ?? 0), 0, ',', '.')) ?> agenda</strong>
-          <small><?= h(number_format((int) ($row['Fisik'] ?? 0), 0, ',', '.')) ?> fisik, <?= h(number_format((int) ($row['Zoom'] ?? 0), 0, ',', '.')) ?> Zoom, <?= h(number_format((int) ($row['Selesai'] ?? 0), 0, ',', '.')) ?> selesai</small>
+          <small><?= h(number_format((int) ($row['Fisik'] ?? 0), 0, ',', '.')) ?> fisik, <?= h(number_format((int) ($row['Zoom'] ?? 0), 0, ',', '.')) ?> Zoom, <?= h(number_format((int) ($row['Selesai'] ?? 0), 0, ',', '.')) ?> selesai<?= (int) ($row['Libur'] ?? 0) > 0 ? ', ' . h(number_format((int) $row['Libur'], 0, ',', '.')) . ' bentrok libur' : '' ?></small>
         </article>
       <?php endforeach; ?>
     </section>
 
+    <?php if ($whatsappArtifact && $role !== 'koordinator'): ?>
+      <section class="panel">
+        <div class="panel-head">
+          <div><h2>Laporan WhatsApp Kunjungan Koordinator</h2><span>Rekap laporan koordinator semua regional hari ini - dibuat <?= h(rsm_wib_datetime_label((string) ($whatsappArtifact['generated_at'] ?? ''))) ?></span></div>
+        </div>
+        <textarea class="whatsapp-safe-text" readonly><?= h((string) ($whatsappArtifact['text'] ?? '')) ?></textarea>
+        <div class="achievement-report-actions">
+          <button class="secondary-btn whatsapp-safe-copy" type="button">Copy Text Otomatis</button>
+        </div>
+      </section>
+    <?php endif; ?>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div><h2>Rekap Checklist Jobdesk Kunjungan</h2><span><?= h(number_format((int) $checklistSummary['considered'], 0, ',', '.')) ?> kunjungan selesai dengan checklist terisi bulan ini - diurutkan dari yang paling sering terlewat</span></div>
+      </div>
+      <?php if ((int) $checklistSummary['considered'] === 0): ?>
+        <p class="muted">Belum ada kunjungan selesai dengan checklist terisi untuk filter ini.</p>
+      <?php else: ?>
+        <div class="checklist-summary-list">
+          <?php foreach ($checklistSummary['items'] as $item): ?>
+            <div class="checklist-summary-row">
+              <span class="checklist-summary-label"><?= h((string) $item['label']) ?></span>
+              <div class="checklist-summary-bar"><div class="checklist-summary-fill" style="width: <?= h((string) $item['percent']) ?>%"></div></div>
+              <span class="checklist-summary-value"><?= h((string) $item['checked']) ?>/<?= h((string) $item['total']) ?> (<?= h((string) $item['percent']) ?>%)</span>
+            </div>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
+    </section>
+
     <?php if ($canManage): ?>
       <section class="panel form-panel">
-        <div class="panel-head"><h2>Tambah Agenda Kunjungan</h2><span>Koordinator dapat mengisi hasil setelah kunjungan selesai</span></div>
-        <form class="data-form" method="post">
+        <?php if ($role === 'koordinator'): ?>
+          <div class="panel-head"><h2>Laporan Hasil Kunjungan</h2><span>Hanya bisa diisi untuk kunjungan hari ini, <?= h(date_id_label(date('Y-m-d'))) ?></span></div>
+        <?php else: ?>
+          <div class="panel-head"><h2>Tambah Agenda Kunjungan</h2><span>Koordinator dapat mengisi hasil setelah kunjungan selesai</span></div>
+        <?php endif; ?>
+        <form class="data-form" method="post"<?= $role === 'koordinator' ? ' enctype="multipart/form-data"' : '' ?>>
           <?= rsm_csrf_field() ?>
           <input type="hidden" name="action" value="save_coordinator_schedule">
-          <label><span>Tanggal</span><input type="date" name="schedule_date" value="<?= h(date('Y-m-d')) ?>" required></label>
+          <label><span>Tanggal</span><input type="date" name="schedule_date" value="<?= h(date('Y-m-d')) ?>"<?= $role === 'koordinator' ? ' min="' . h(date('Y-m-d')) . '" max="' . h(date('Y-m-d')) . '" readonly' : '' ?> required></label>
           <label><span>Wilayah</span><select name="wilayah" class="js-campus-regional-select" required>
             <option value="">Pilih wilayah</option>
             <?php foreach ($references['regionals'] as $regional): ?>
@@ -1639,12 +1748,73 @@ function render_coordinator_schedule_page(array $filters, array $schedules, arra
               <option value="<?= h((string) $profile['name']) ?>"><?= h((string) $profile['name']) ?> - <?= h($regional) ?> (<?= h((string) $profile['home']) ?>)</option>
             <?php endforeach; ?>
           </select></label>
-          <label><span>Unit/Kampus</span><select name="unit_name" class="js-campus-filter-select" required><option value="">Pilih unit/kampus</option><?php foreach ($references['campuses'] as $campus): ?><option value="<?= h((string) $campus['label']) ?>" data-regional="<?= h((string) ($campus['regional'] ?? '')) ?>"><?= h((string) $campus['label']) ?></option><?php endforeach; ?></select></label>
+          <?php if ($role === 'koordinator'): ?>
+            <?php
+              $todaysCampuses = [];
+              foreach (($schedules['rows'] ?? []) as $sRow) {
+                  if ((string) ($sRow['schedule_date'] ?? '') !== date('Y-m-d')) {
+                      continue;
+                  }
+                  $unitLabel = (string) ($sRow['unit_name'] ?? '');
+                  if ($unitLabel !== '') {
+                      $todaysCampuses[$unitLabel] = true;
+                  }
+              }
+              $todaysCampuses = array_keys($todaysCampuses);
+            ?>
+            <?php if (count($todaysCampuses) === 1): ?>
+              <label><span>Unit/Kampus</span>
+                <input type="text" value="<?= h($todaysCampuses[0]) ?>" readonly>
+                <input type="hidden" name="unit_name" value="<?= h($todaysCampuses[0]) ?>">
+              </label>
+            <?php else: ?>
+              <label><span>Unit/Kampus</span><select name="unit_name" required>
+                <option value="">Pilih unit/kampus</option>
+                <?php foreach ($todaysCampuses as $unitLabel): ?>
+                  <option value="<?= h($unitLabel) ?>"<?= $unitLabel === ($todaysCampuses[0] ?? null) ? ' selected' : '' ?>><?= h($unitLabel) ?></option>
+                <?php endforeach; ?>
+                <?php if ($todaysCampuses === []): ?>
+                  <?php foreach ($references['campuses'] as $campus): ?>
+                    <?php if ((string) ($campus['regional'] ?? '') !== (string) ($authUser['regional'] ?? '')) { continue; } ?>
+                    <option value="<?= h((string) $campus['label']) ?>"><?= h((string) $campus['label']) ?></option>
+                  <?php endforeach; ?>
+                <?php endif; ?>
+              </select></label>
+            <?php endif; ?>
+          <?php else: ?>
+            <label><span>Unit/Kampus</span><select name="unit_name" class="js-campus-filter-select" required><option value="">Pilih unit/kampus</option><?php foreach ($references['campuses'] as $campus): ?><option value="<?= h((string) $campus['label']) ?>" data-regional="<?= h((string) ($campus['regional'] ?? '')) ?>"><?= h((string) $campus['label']) ?></option><?php endforeach; ?></select></label>
+          <?php endif; ?>
           <label><span>Tipe</span><select name="visit_type"><option>Fisik</option><option selected>Zoom</option><option>Telepon</option></select></label>
-          <label><span>Status</span><select name="status"><option>Rencana</option><option>Dijadwalkan</option><option>Selesai</option><option>Reschedule</option></select></label>
+          <label><span>Status</span><select name="status"><option>Rencana</option><option>Dijadwalkan</option><option<?= $role === 'koordinator' ? ' selected' : '' ?>>Selesai</option><option>Reschedule</option></select></label>
           <label class="form-full"><span>Agenda</span><input name="agenda" value="Monitoring PMB, leads, iklan, dan action plan kampus"></label>
+          <?php if ($role === 'koordinator'): ?>
+            <div class="form-full checklist-jobdesk">
+              <span class="checklist-jobdesk-title">Jobdesk Selama Kunjungan dan Supervisi</span>
+              <?php foreach (rsm_coordinator_visit_jobdesk_items() as $itemKey => $itemLabel): ?>
+                <div class="checklist-jobdesk-item">
+                  <span class="checklist-jobdesk-label"><?= h((string) $itemKey) ?>. <?= h($itemLabel) ?></span>
+                  <div class="checklist-jobdesk-options" data-checklist-pair-group>
+                    <label class="checklist-jobdesk-option">
+                      <input type="checkbox" name="checklist_<?= h((string) $itemKey) ?>" value="1" data-checklist-pair>
+                      <span>Lengkap</span>
+                    </label>
+                    <label class="checklist-jobdesk-option">
+                      <input type="checkbox" data-checklist-pair checked>
+                      <span>Belum Lengkap</span>
+                    </label>
+                  </div>
+                  <input type="text" class="checklist-jobdesk-note" name="checklist_note_<?= h((string) $itemKey) ?>" value="" placeholder="Catatan kecil (opsional)" maxlength="200">
+                </div>
+              <?php endforeach; ?>
+            </div>
+          <?php endif; ?>
           <label class="form-full"><span>Catatan hasil</span><textarea name="result_text" rows="3" placeholder="Diisi setelah kunjungan/Zoom selesai"></textarea></label>
-          <label class="form-full"><span>Follow up berikutnya</span><textarea name="next_action" rows="3" placeholder="Action plan, PIC kampus, kendala, kebutuhan support"></textarea></label>
+          <?php if ($role !== 'koordinator'): ?>
+            <label class="form-full"><span>Follow up berikutnya</span><textarea name="next_action" rows="3" placeholder="Action plan, PIC kampus, kendala, kebutuhan support"></textarea></label>
+          <?php endif; ?>
+          <?php if ($role === 'koordinator'): ?>
+            <label class="form-full"><span>Upload dokumentasi aktivitas</span><input type="file" name="schedule_attachment" accept=".jpg,.jpeg,.png,.webp,.pdf"><small>JPG, PNG, WEBP, atau PDF. Maksimal 5 MB.</small></label>
+          <?php endif; ?>
           <div class="form-actions form-full"><button class="primary-btn">Simpan Jadwal</button></div>
         </form>
       </section>
@@ -1668,12 +1838,14 @@ function render_coordinator_schedule_page(array $filters, array $schedules, arra
                 <thead><tr><th>Tanggal</th><th>Korwil</th><th>Unit/Kampus</th><th>Tipe</th><th>Agenda</th><th>Status</th><th>Hasil & Follow Up</th><th>Aksi</th></tr></thead>
                 <tbody>
                 <?php foreach ($rows as $row): ?>
-                  <tr>
-                    <td data-label="Tanggal"><strong><?= h(date_id_label((string) $row['schedule_date'])) ?></strong></td>
+                  <?php $liburCode = (string) ($row['libur_code'] ?? ''); $isToday = (string) $row['schedule_date'] === date('Y-m-d'); ?>
+                  <?php $rowClasses = array_filter([$liburCode !== '' ? 'schedule-row-libur' : '', $isToday ? 'schedule-row-today' : '']); ?>
+                  <tr<?= $rowClasses ? ' class="' . h(implode(' ', $rowClasses)) . '"' : '' ?>>
+                    <td data-label="Tanggal"><strong><?= h(date_id_label((string) $row['schedule_date'])) ?></strong><?php if ($isToday): ?> <span class="badge badge-berjalan">Hari ini</span><?php endif; ?></td>
                     <td data-label="Korwil"><?= h((string) $row['koordinator_name']) ?><small><?= h((string) (($row['koordinator_home'] ?? '') ?: '-')) ?></small></td>
                     <td data-label="Unit/Kampus"><?= h((string) $row['unit_name']) ?></td>
-                    <td data-label="Tipe"><span class="visit-pill visit-<?= h(strtolower((string) $row['visit_type'])) ?>"><?= h((string) $row['visit_type']) ?></span></td>
-                    <td data-label="Agenda"><?= h((string) $row['agenda']) ?></td>
+                    <td data-label="Tipe"><?php if ((string) $row['visit_type'] !== ''): ?><span class="visit-pill visit-<?= h(strtolower((string) $row['visit_type'])) ?>"><?= h((string) $row['visit_type']) ?></span><?php else: ?>-<?php endif; ?></td>
+                    <td data-label="Agenda"><?= h((string) (($row['agenda'] ?? '') ?: '-')) ?></td>
                     <td data-label="Status"><?= badge((string) $row['status']) ?></td>
                     <td data-label="Hasil & Follow Up">
                       <strong><?= h((string) (($row['result_text'] ?? '') ?: '-')) ?></strong>
@@ -1687,13 +1859,17 @@ function render_coordinator_schedule_page(array $filters, array $schedules, arra
                         <?php $editModalId = 'schedule-edit-modal-' . (int) $row['id']; $reportModalId = 'schedule-report-modal-' . (int) $row['id']; ?>
                         <div class="schedule-action-buttons">
                           <button class="secondary-btn compact-btn" type="button" data-modal-target="<?= h($editModalId) ?>">Edit</button>
-                          <button class="primary-btn compact-btn" type="button" data-modal-target="<?= h($reportModalId) ?>">Laporan</button>
-                          <form method="post" onsubmit="return confirm('Hapus jadwal ini?')">
-                            <?= rsm_csrf_field() ?>
-                            <input type="hidden" name="action" value="delete_coordinator_schedule">
-                            <input type="hidden" name="schedule_id" value="<?= h((string) $row['id']) ?>">
-                            <button class="icon-danger-btn compact-btn" title="Hapus jadwal">Hapus</button>
-                          </form>
+                          <?php if ($role !== 'koordinator'): ?>
+                            <button class="primary-btn compact-btn" type="button" data-modal-target="<?= h($reportModalId) ?>">Laporan</button>
+                          <?php endif; ?>
+                          <?php if ($role !== 'koordinator'): ?>
+                            <form method="post" onsubmit="return confirm('Hapus jadwal ini?')">
+                              <?= rsm_csrf_field() ?>
+                              <input type="hidden" name="action" value="delete_coordinator_schedule">
+                              <input type="hidden" name="schedule_id" value="<?= h((string) $row['id']) ?>">
+                              <button class="icon-danger-btn compact-btn" title="Hapus jadwal">Hapus</button>
+                            </form>
+                          <?php endif; ?>
                         </div>
                         <div class="schedule-modal" id="<?= h($editModalId) ?>" hidden>
                           <div class="schedule-modal-backdrop" data-modal-close></div>
@@ -1723,6 +1899,7 @@ function render_coordinator_schedule_page(array $filters, array $schedules, arra
                             </form>
                           </section>
                         </div>
+                        <?php if ($role !== 'koordinator'): ?>
                         <div class="schedule-modal" id="<?= h($reportModalId) ?>" hidden>
                           <div class="schedule-modal-backdrop" data-modal-close></div>
                           <section class="schedule-modal-card" role="dialog" aria-modal="true" aria-labelledby="<?= h($reportModalId) ?>-title">
@@ -1738,6 +1915,21 @@ function render_coordinator_schedule_page(array $filters, array $schedules, arra
                               <input type="hidden" name="action" value="report_coordinator_schedule">
                               <input type="hidden" name="schedule_id" value="<?= h((string) $row['id']) ?>">
                               <label><span>Status</span><select name="status"><?php foreach (['Rencana', 'Dijadwalkan', 'Selesai', 'Reschedule'] as $status): ?><option value="<?= h($status) ?>"<?= selected_attr((string) $row['status'], $status) ?>><?= h($status) ?></option><?php endforeach; ?></select></label>
+                              <div class="form-full checklist-jobdesk">
+                                <span class="checklist-jobdesk-title">Jobdesk Selama Kunjungan dan Supervisi</span>
+                                <?php $checklistState = rsm_coordinator_schedule_checklist_state($row); ?>
+                                <?php foreach (rsm_coordinator_visit_jobdesk_items() as $itemKey => $itemLabel): ?>
+                                  <?php $itemChecked = !empty($checklistState[$itemKey]['checked']); $itemNote = (string) ($checklistState[$itemKey]['note'] ?? ''); ?>
+                                  <div class="checklist-jobdesk-item">
+                                    <label class="checklist-jobdesk-check">
+                                      <input type="checkbox" name="checklist_<?= h((string) $itemKey) ?>" value="1" data-checklist-toggle<?= $itemChecked ? ' checked' : '' ?>>
+                                      <span class="checklist-jobdesk-label"><?= h((string) $itemKey) ?>. <?= h($itemLabel) ?></span>
+                                      <span class="checklist-jobdesk-status<?= $itemChecked ? ' is-complete' : '' ?>"><?= $itemChecked ? 'Lengkap' : 'Belum Lengkap' ?></span>
+                                    </label>
+                                    <input type="text" class="checklist-jobdesk-note" name="checklist_note_<?= h((string) $itemKey) ?>" value="<?= h($itemNote) ?>" placeholder="Catatan kecil (opsional)" maxlength="200">
+                                  </div>
+                                <?php endforeach; ?>
+                              </div>
                               <label class="form-full"><span>Catatan hasil</span><textarea name="result_text" rows="4" placeholder="Hasil kunjungan"><?= h((string) ($row['result_text'] ?? '')) ?></textarea></label>
                               <label class="form-full"><span>Follow up berikutnya</span><textarea name="next_action" rows="4" placeholder="Follow up berikutnya"><?= h((string) ($row['next_action'] ?? '')) ?></textarea></label>
                               <label class="form-full"><span>Upload dokumentasi aktivitas</span><input type="file" name="schedule_attachment" accept=".jpg,.jpeg,.png,.webp,.pdf"><small>JPG, PNG, WEBP, atau PDF. Maksimal 5 MB.</small></label>
@@ -1748,6 +1940,7 @@ function render_coordinator_schedule_page(array $filters, array $schedules, arra
                             </form>
                           </section>
                         </div>
+                        <?php endif; ?>
                       <?php else: ?>
                         <span class="muted">Lihat saja</span>
                       <?php endif; ?>
@@ -2055,6 +2248,52 @@ function render_ad_budget_limit_panel(string $period, array $periodOptions, arra
           <label class="wide"><span>Catatan</span><input name="notes" placeholder="Opsional"></label>
           <div class="form-actions"><button class="primary-btn">Simpan Plafon</button></div>
         </form>
+      <?php endif; ?>
+    </section>
+    <?php
+}
+
+function render_ads_pending_report_panel(array $pendingReports, string $role): void
+{
+    if ($role !== 'staff' || !$pendingReports) {
+        return;
+    }
+    $unreported = array_filter($pendingReports, static fn (array $row): bool => ($row['pending_reason'] ?? '') === 'belum_dilaporkan');
+    $incomplete = array_filter($pendingReports, static fn (array $row): bool => ($row['pending_reason'] ?? '') === 'belum_tuntas');
+    ?>
+    <section class="panel ads-pending-report-panel">
+      <div class="panel-head">
+        <div>
+          <h2>Anggaran Perlu Dilaporkan</h2>
+          <span>Otomatis muncul untuk anggaran kampus Anda yang belum atau belum tuntas dilaporkan</span>
+        </div>
+      </div>
+      <?php if ($unreported): ?>
+        <h3 class="pending-report-subtitle">Belum Dilaporkan (<?= h((string) count($unreported)) ?>)</h3>
+        <div class="table-wrap ads-report-table"><table><thead><tr><th>Tanggal</th><th>Platform/Campaign</th><th>Anggaran Disetujui</th><th>Status</th></tr></thead><tbody>
+          <?php foreach ($unreported as $row): ?>
+            <tr>
+              <td><?= h((string) $row['report_date']) ?><small class="ads-campaign-name"><?= h((string) (($row['ad_period'] ?? '') ?: rsm_default_ad_period((string) ($row['report_date'] ?? '')))) ?></small></td>
+              <td><?= h((string) ($row['platform'] ?: '-')) ?><small class="ads-campaign-name"><?= h((string) (($row['campaign_name'] ?: $row['title']) ?: '-')) ?></small></td>
+              <td><?= h(money_idr((float) ($row['budget_approved'] ?: $row['budget_requested']))) ?></td>
+              <td><?= badge((string) $row['status']) ?></td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody></table></div>
+      <?php endif; ?>
+      <?php if ($incomplete): ?>
+        <h3 class="pending-report-subtitle">Belum Tuntas Dilaporkan (<?= h((string) count($incomplete)) ?>)</h3>
+        <div class="table-wrap ads-report-table"><table><thead><tr><th>Tanggal</th><th>Platform/Campaign</th><th>Realisasi</th><th>Bukti</th><th>Status</th></tr></thead><tbody>
+          <?php foreach ($incomplete as $row): ?>
+            <tr>
+              <td><?= h((string) $row['report_date']) ?></td>
+              <td><?= h((string) ($row['platform'] ?: '-')) ?><small class="ads-campaign-name"><?= h((string) (($row['campaign_name'] ?: $row['title']) ?: '-')) ?></small></td>
+              <td><?= h(money_idr((float) $row['realization_amount'])) ?></td>
+              <td><?= attachment_badge((string) ($row['attachment_path'] ?? '')) ?></td>
+              <td><?= badge((string) $row['status']) ?></td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody></table></div>
       <?php endif; ?>
     </section>
     <?php
@@ -2594,7 +2833,7 @@ function render_whatsapp_artifact_panel(?array $artifact): void
           <h3>Bahan WhatsApp Otomatis</h3>
           <span>Generate terjadwal, admin tetap copy/send manual.</span>
         </div>
-        <?php if (rsm_can_sync_collab(rsm_admin_actor())): ?>
+        <?php if ((string) (rsm_admin_actor()['role'] ?? '') === 'super_user'): ?>
           <form method="post">
             <?= rsm_csrf_field() ?>
             <input type="hidden" name="action" value="generate_whatsapp_achievement">
@@ -3682,49 +3921,17 @@ function campus_short_label(string $name): string
 
 function campus_alias_key(string $name): string
 {
-    $label = mb_strtolower(trim($name));
-    $label = str_replace(['-', '_'], ' ', $label);
-    $label = preg_replace('/\s+/u', ' ', $label) ?? $label;
-
-    $aliasGroups = [
-        'uinaz' => ['universitas islam nusantara al azhaar lubuklinggau', 'universitas islam nusantara al-azhaar lubuklinggau', 'uin al azhaar lubuklinggau', 'uin al-azhaar lubuklinggau', 'inaal', 'uaal', 'uinaz'],
-        'ivet' => ['universitas ivet', 'ivet semarang', 'ivet'],
-        'uwks' => ['universitas wijaya kusuma surabaya', 'uwk surabaya', 'uwks'],
-        'uwika' => ['universitas widya kartika', 'uwika', 'uwk'],
-        'uhamzah' => ['uhamzah', 'universitas hamzanwadi', 'universitas hamzah'],
-    ];
-    foreach ($aliasGroups as $key => $aliases) {
-        foreach ($aliases as $alias) {
-            if (str_contains($label, $alias)) {
-                return $key;
-            }
-        }
-    }
-
-    $label = preg_replace('/\[[^\]]+\]|\([^\)]+\)/u', ' ', $label) ?? $label;
-    $label = str_replace(['universitas', 'institut', 'sekolah tinggi ilmu ekonomi', 'sekolah tinggi', 'surabaya'], ' ', $label);
-    return preg_replace('/[^a-z0-9]+/u', '', $label) ?? '';
+    return rsm_campus_alias_key($name);
 }
 
 function campus_canonical_label(string $name): string
 {
-    $label = [
-        'uinaz' => 'Universitas Islam Nusantara Al-Azhaar Lubuklinggau',
-        'ivet' => 'Universitas IVET',
-        'uwks' => 'Universitas Wijaya Kusuma Surabaya',
-        'uwika' => 'Universitas Widya Kartika',
-        'uhamzah' => 'UHAMZAH',
-    ][campus_alias_key($name)] ?? $name;
-
-    return campus_plain_label($label);
+    return rsm_campus_canonical_label($name);
 }
 
 function campus_plain_label(string $name): string
 {
-    $name = preg_replace('/\s*[\(\[].*?[\)\]]\s*/', ' ', $name) ?? $name;
-    $name = preg_replace('/\s+/', ' ', trim($name)) ?? trim($name);
-
-    return $name !== '' ? $name : '-';
+    return rsm_campus_plain_label($name);
 }
 
 function render_social_content_forms(array $accounts, array $references, ?array $authUser): void
@@ -3987,11 +4194,13 @@ function action_buttons(string $role, int $id, string $status, string $reportTyp
         $buttons .= delete_form($id);
     }
     if ($reportType === 'ads') {
+        $statusKey = strtolower(trim($status));
         if (in_array($role, ['super_user', 'executive_director', 'director', 'senior'], true)) {
-            $statusKey = strtolower(trim($status));
             if (in_array($statusKey, ['pengajuan', 'revisi'], true)) {
                 $buttons .= ads_approval_form($id, $budgetRequested) . status_form($id, 'Ditolak', 'Tolak', false, 'danger') . status_form($id, 'Revisi', 'Revisi', true);
             }
+        } elseif ($role === 'koordinator' && $statusKey === 'dilaporkan unit') {
+            $buttons .= status_form($id, 'Selesai', 'Setujui');
         }
         return $buttons . '</div>';
     }
@@ -4097,6 +4306,7 @@ function status_form(int $id, string $status, string $label, bool $needsNote = f
     $icons = [
         'Diverifikasi' => 'check',
         'Disetujui' => 'check',
+        'Selesai' => 'check',
         'Ditolak' => 'x',
         'Revisi' => 'rotate',
     ];
@@ -4135,7 +4345,7 @@ function role_points(string $role): array
         'director' => ['Melihat semua wilayah, unit, dan staff', 'Menyetujui atau menolak laporan', 'Mengatur target pencapaian staff', 'Export semua laporan', 'Tidak melihat menu Kelola User'],
         'senior' => ['Melihat semua wilayah, unit, dan staff', 'Menyetujui atau menolak laporan', 'Melihat seluruh anggaran iklan', 'Export semua laporan', 'Wajib memberi catatan jika revisi'],
         'mentor' => ['Melihat semua wilayah, unit, dan staff', 'Mengatur target pencapaian staff', 'Tidak melihat menu Kelola User'],
-        'koordinator' => ['Melihat data wilayahnya saja', 'Mengajukan laporan iklan wilayah', 'Memverifikasi laporan staff unit', 'Menambahkan kegiatan wilayah', 'Membuat rekap wilayah'],
+        'koordinator' => ['Melihat data wilayahnya saja', 'Mengajukan laporan iklan wilayah', 'Memverifikasi laporan staff unit', 'Menyetujui laporan iklan unit yang sudah dilaporkan', 'Menambahkan kegiatan wilayah', 'Membuat rekap wilayah'],
         'staff' => ['Menambahkan laporan kegiatan', 'Melihat laporan milik sendiri', 'Edit hanya saat Draft atau Revisi', 'Tidak melihat wilayah lain', 'Tidak bisa menyetujui laporan'],
     ][$role] ?? [];
 }

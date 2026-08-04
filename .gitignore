@@ -11,6 +11,9 @@ runtime/
 # Arsip deployment
 *.zip
 
+# Backup database lokal
+backups/
+
 # Dependency
 vendor/
 node_modules/

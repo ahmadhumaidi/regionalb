@@ -1,4 +1,10 @@
 (function () {
+  document.querySelectorAll('.schedule-modal').forEach((modal) => {
+    if (modal.parentElement !== document.body) {
+      document.body.appendChild(modal);
+    }
+  });
+
   const menuToggle = document.querySelector('.mobile-menu-toggle');
   const sidebarMenu = document.querySelector('#sidebar-menu');
   if (menuToggle && sidebarMenu) {
@@ -63,6 +69,34 @@
       regionalSelect.value = '';
     }
   };
+
+  document.querySelectorAll('[data-checklist-toggle]').forEach((checkbox) => {
+    const status = checkbox.closest('.checklist-jobdesk-check')?.querySelector('.checklist-jobdesk-status');
+    if (!status) {
+      return;
+    }
+    checkbox.addEventListener('change', () => {
+      status.textContent = checkbox.checked ? 'Lengkap' : 'Belum Lengkap';
+      status.classList.toggle('is-complete', checkbox.checked);
+    });
+  });
+
+  document.querySelectorAll('[data-checklist-pair-group]').forEach((group) => {
+    const boxes = Array.from(group.querySelectorAll('[data-checklist-pair]'));
+    boxes.forEach((box) => {
+      box.addEventListener('change', () => {
+        if (box.checked) {
+          boxes.forEach((other) => {
+            if (other !== box) {
+              other.checked = false;
+            }
+          });
+        } else {
+          box.checked = true;
+        }
+      });
+    });
+  });
 
   document.querySelectorAll('.js-area-select').forEach((areaSelect) => {
     syncRegionalOptions(areaSelect);

@@ -125,6 +125,10 @@ textarea {
   position: sticky;
   top: 0;
   height: 100vh;
+  height: 100dvh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   padding: 24px;
   border-right: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.92);
@@ -641,6 +645,10 @@ button:active {
 .tone-amber { border-top: 4px solid var(--amber); }
 .tone-slate { border-top: 4px solid #64748b; }
 
+.ads-pending-report-panel { border-top: 4px solid var(--amber); }
+.pending-report-subtitle { margin: 16px 0 8px; font-size: 0.95rem; }
+.pending-report-subtitle:first-of-type { margin-top: 0; }
+
 .filter-bar {
   display: grid;
   grid-template-columns: repeat(5, minmax(140px, 1fr));
@@ -823,7 +831,7 @@ button:active {
 .panel {
   padding: 18px;
   margin-bottom: 18px;
-  animation: soft-rise 360ms var(--ease-soft) both;
+  animation: soft-rise 360ms var(--ease-soft) backwards;
 }
 
 .panel-head {
@@ -2069,6 +2077,24 @@ tr.group-subheading span {
 .badge-selesai { color: #166534; background: #dcfce7; }
 .badge-revisi { color: #9a3412; background: #ffedd5; }
 .badge-ditolak { color: #991b1b; background: #fee2e2; }
+.badge-danger { color: #991b1b; background: #fee2e2; margin-left: 6px; }
+
+.schedule-row-libur {
+  background: #fef2f2;
+}
+
+.schedule-row-libur:hover {
+  background: #fee2e2;
+}
+
+.schedule-row-today {
+  background: #eff6ff;
+  box-shadow: inset 3px 0 0 #2563eb;
+}
+
+.schedule-row-today:hover {
+  background: #dbeafe;
+}
 
 .text-btn {
   margin-right: 6px;
@@ -2213,6 +2239,14 @@ tr.group-subheading span {
   z-index: 1;
   background: inherit;
   box-shadow: 1px 0 0 var(--line);
+}
+
+.table-wrap.jadwal-raw-wrap tbody td:first-child {
+  background: var(--panel);
+}
+
+.table-wrap.jadwal-raw-wrap tbody tr:nth-child(even) td:first-child {
+  background: #f8fafc;
 }
 
 .collab-raw-table thead th.sticky-col {
@@ -3011,6 +3045,11 @@ tr.group-subheading span {
     top: 0;
     z-index: 30;
     height: auto;
+    max-height: 100vh;
+    max-height: 100dvh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
     border-right: 0;
     border-bottom: 1px solid var(--line);
     background: rgba(255, 255, 255, 0.98);
@@ -3090,9 +3129,9 @@ tr.group-subheading span {
   }
 
   .mobile-menu-open .menu {
-    max-height: calc(100vh - 96px);
+    max-height: 3000px;
     margin-top: 14px;
-    overflow: auto;
+    overflow: visible;
     opacity: 1;
     transform: translateY(0);
   }
@@ -3488,6 +3527,50 @@ tr.group-subheading span {
     max-width: 100%;
   }
 
+  .table-wrap.jadwal-raw-wrap {
+    overflow: auto;
+    margin-inline: -14px;
+    padding-inline: 14px;
+  }
+
+  .table-wrap.jadwal-raw-wrap table {
+    display: table;
+    width: auto !important;
+    min-width: 900px;
+    table-layout: auto;
+    font-size: 12px;
+  }
+
+  .table-wrap.jadwal-raw-wrap thead {
+    display: table-header-group;
+  }
+
+  .table-wrap.jadwal-raw-wrap tbody {
+    display: table-row-group;
+  }
+
+  .table-wrap.jadwal-raw-wrap tr {
+    display: table-row;
+    width: auto !important;
+    margin-bottom: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .table-wrap.jadwal-raw-wrap td,
+  .table-wrap.jadwal-raw-wrap th {
+    display: table-cell;
+    width: auto !important;
+    white-space: nowrap;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .table-wrap.jadwal-raw-wrap td::before {
+    content: none;
+  }
+
   .bdc-table {
     max-height: none;
   }
@@ -3807,6 +3890,135 @@ body.modal-open {
 
 .schedule-modal-form {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.checklist-jobdesk {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: #f8fafc;
+}
+
+.checklist-jobdesk-title {
+  display: block;
+  font-weight: 900;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.checklist-jobdesk-item {
+  padding: 5px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.checklist-jobdesk-item:last-child {
+  border-bottom: none;
+}
+
+.checklist-jobdesk-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.checklist-jobdesk-check input {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.checklist-jobdesk-label {
+  flex: 1;
+}
+
+.checklist-jobdesk-status {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fee2e2;
+  color: #b91c1c;
+  white-space: nowrap;
+}
+
+.checklist-jobdesk-status.is-complete {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.checklist-jobdesk-options {
+  display: flex;
+  gap: 14px;
+  margin-top: 4px;
+}
+
+.checklist-jobdesk-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.checklist-jobdesk-note {
+  width: 100%;
+  margin-top: 4px;
+  padding: 5px 8px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.checklist-summary-list {
+  display: grid;
+  gap: 10px;
+}
+
+.checklist-summary-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 90px;
+  align-items: center;
+  gap: 12px;
+}
+
+.checklist-summary-label {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.checklist-summary-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.checklist-summary-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--blue, #2563eb);
+}
+
+.checklist-summary-value {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--muted);
+  text-align: right;
+}
+
+@media (max-width: 760px) {
+  .checklist-summary-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .checklist-summary-value {
+    text-align: left;
+  }
 }
 
 .tiny-link {

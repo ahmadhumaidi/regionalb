@@ -330,6 +330,7 @@ function rsm_ensure_schema(): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
     );
     rsm_add_column_if_missing('rsm_coordinator_schedules', 'attachment_path', 'VARCHAR(500) NULL AFTER next_action');
+    rsm_add_column_if_missing('rsm_coordinator_schedules', 'checklist_json', 'TEXT NULL AFTER attachment_path');
 
     $pdo->exec(
         "CREATE TABLE IF NOT EXISTS rsm_bdc_report_user_snapshots (
@@ -1048,9 +1049,9 @@ function rsm_add_unique_coordinator(array &$coordinators, string $regional, arra
     $coordinators[$regional][] = $user;
 }
 
-function rsm_users(string $area): array
+function rsm_users(string $area, bool $activeOnly = false): array
 {
-    $sql = "SELECT * FROM rsm_users WHERE is_active IN (0,1)";
+    $sql = $activeOnly ? "SELECT * FROM rsm_users WHERE is_active = 1" : "SELECT * FROM rsm_users WHERE is_active IN (0,1)";
     $params = [];
     if ($area !== 'Regional') {
         $sql .= " AND (area = ? OR area IS NULL OR role IN ('super_user','executive_director','director','senior'))";
@@ -1734,6 +1735,7 @@ function rsm_campus_alias_key(string $label): string
         'umsj' => ['universitas mochammad sroedji jember', 'umsj', 'msj'],
         'ima' => ['ima', 'mhaakb', 'institut miftahul huda al azhar kota banjar'],
         'stbalia' => ['stba lia yogyakarta', 'balysl', 'sekolah tinggi bahasa asing lia yogyakarta'],
+        'unaki' => ['universitas aki semarang', 'universitas aki', 'unaki'],
     ];
     foreach ($aliasGroups as $key => $aliases) {
         foreach ($aliases as $alias) {
@@ -1763,6 +1765,7 @@ function rsm_campus_canonical_label(string $label): string
         'umsj' => 'Universitas Mochammad Sroedji Jember',
         'ima' => 'IMA',
         'stbalia' => 'STBA LIA Yogyakarta',
+        'unaki' => 'Universitas AKI Semarang',
     ][rsm_campus_alias_key($label)] ?? $label;
 
     return rsm_campus_plain_label($canonical);
@@ -1793,6 +1796,7 @@ function rsm_campus_alias_variants(string $label): array
         'umsj' => ['Universitas Mochammad Sroedji Jember', 'UMSJ', 'MSJ'],
         'ima' => ['IMA', 'MHAAKB', 'Institut Miftahul Huda Al Azhar Kota Banjar'],
         'stbalia' => ['STBA LIA Yogyakarta', 'BALYSL', 'Sekolah Tinggi Bahasa Asing LIA Yogyakarta'],
+        'unaki' => ['Universitas AKI Semarang', 'Universitas AKI', 'UNAKI'],
     ];
     if ($key === '' || !isset($variants[$key])) {
         return [$label];
@@ -2081,7 +2085,7 @@ function rsm_ad_budget_summaries(string $area, string $period, ?array $user = nu
 {
     $where = ['l.area = ?', 'l.ad_period = ?'];
     $params = [$area, $period];
-    if ($user && (string) ($user['role'] ?? '') === 'koordinator' && (string) ($user['regional'] ?? '') !== '') {
+    if ($user && in_array((string) ($user['role'] ?? ''), ['koordinator', 'staff'], true) && (string) ($user['regional'] ?? '') !== '') {
         $where[] = 'l.wilayah = ?';
         $params[] = (string) $user['regional'];
     }
@@ -2509,13 +2513,16 @@ function rsm_update_status(string $area, string $role): void
     if ($role === 'staff') {
         throw new RuntimeException('Staff tidak dapat mengubah status persetujuan.');
     }
-    if ($reportType === 'ads' && !in_array($role, ['super_user', 'executive_director', 'director', 'senior'], true)) {
+    if ($reportType === 'ads' && $role === 'koordinator') {
+        if (strtolower((string) $report['status']) !== 'dilaporkan unit' || $newStatus !== 'Selesai') {
+            throw new RuntimeException('Koordinator hanya dapat menyetujui laporan iklan unit yang berstatus Dilaporkan Unit.');
+        }
+    } elseif ($reportType === 'ads' && !in_array($role, ['super_user', 'executive_director', 'director', 'senior'], true)) {
         throw new RuntimeException('Laporan iklan hanya dapat disetujui, ditolak, atau direvisi oleh Senior Manager.');
-    }
-    if ($reportType === 'ads' && !in_array($newStatus, ['Disetujui', 'Ditolak', 'Revisi'], true)) {
+    } elseif ($reportType === 'ads' && !in_array($newStatus, ['Disetujui', 'Ditolak', 'Revisi'], true)) {
         throw new RuntimeException('Status laporan iklan hanya bisa Disetujui, Ditolak, atau Revisi dari Senior Manager.');
     }
-    if ($role === 'koordinator' && !in_array($newStatus, ['Diverifikasi', 'Revisi'], true)) {
+    if ($role === 'koordinator' && $reportType !== 'ads' && !in_array($newStatus, ['Diverifikasi', 'Revisi'], true)) {
         throw new RuntimeException('Koordinator hanya dapat memverifikasi atau mengembalikan revisi.');
     }
 
@@ -2592,7 +2599,6 @@ function rsm_update_report(string $area, string $role): void
     ];
     if (($report['report_type'] ?? '') === 'ads' && $role === 'staff') {
         $data['report_date'] = (string) $report['report_date'];
-        $data['user_id'] = $authUser['id'] ?? $report['user_id'];
         $data['partner_campus_id'] = $report['partner_campus_id'];
         $data['wilayah'] = (string) $report['wilayah'];
         $data['unit_name'] = (string) $report['unit_name'];
@@ -3045,6 +3051,9 @@ function rsm_save_coordinator_schedule(string $area, array $actor): void
         throw new RuntimeException('Anda tidak memiliki akses mengatur jadwal koordinator.');
     }
     $date = rsm_input('schedule_date');
+    if ((string) ($actor['role'] ?? '') === 'koordinator') {
+        $date = date('Y-m-d');
+    }
     $wilayah = rsm_input('wilayah');
     $unitName = rsm_input('unit_name');
     $visitType = rsm_input('visit_type', 'Zoom');
@@ -3073,6 +3082,7 @@ function rsm_save_coordinator_schedule(string $area, array $actor): void
             (area, schedule_date, koordinator_user_id, koordinator_name, koordinator_home, wilayah, unit_name, visit_type, agenda, status, result_text, next_action, created_by_user_id, created_by_name)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
+            id = LAST_INSERT_ID(id),
             visit_type = VALUES(visit_type),
             agenda = VALUES(agenda),
             status = VALUES(status),
@@ -3096,6 +3106,39 @@ function rsm_save_coordinator_schedule(string $area, array $actor): void
         $actor['id'] ?? null,
         $actor['name'] ?? null,
     ]);
+
+    $scheduleId = (int) $pdo->lastInsertId();
+    if ($scheduleId <= 0) {
+        return;
+    }
+    $hasChecklistInput = false;
+    $checklist = [];
+    foreach (array_keys(rsm_coordinator_visit_jobdesk_items()) as $itemKey) {
+        if (array_key_exists('checklist_' . $itemKey, $_POST) || array_key_exists('checklist_note_' . $itemKey, $_POST)) {
+            $hasChecklistInput = true;
+        }
+        $note = rsm_input('checklist_note_' . $itemKey);
+        if (mb_strlen($note) > 200) {
+            $note = mb_substr($note, 0, 200);
+        }
+        $checklist[$itemKey] = [
+            'checked' => rsm_input('checklist_' . $itemKey) === '1',
+            'note' => $note,
+        ];
+    }
+    $attachmentPath = rsm_schedule_attachment_upload($scheduleId);
+    if ($hasChecklistInput || $attachmentPath !== null) {
+        $updates = ['checklist_json = ?'];
+        $updateValues = [json_encode($checklist, JSON_UNESCAPED_UNICODE)];
+        if ($attachmentPath !== null) {
+            $updates[] = 'attachment_path = ?';
+            $updateValues[] = $attachmentPath;
+        }
+        $updateValues[] = $scheduleId;
+        $updateValues[] = $area;
+        $pdo->prepare('UPDATE rsm_coordinator_schedules SET ' . implode(', ', $updates) . ', updated_at = NOW() WHERE id = ? AND area = ?')
+            ->execute($updateValues);
+    }
 }
 
 function rsm_update_coordinator_schedule(string $area, array $actor): void
@@ -3126,6 +3169,165 @@ function rsm_update_coordinator_schedule(string $area, array $actor): void
     $stmt->execute([$unitName, $visitType, $agenda, $id, $area]);
 }
 
+function rsm_coordinator_visit_jobdesk_items(): array
+{
+    return [
+        1 => 'Cek tools marketing area kampus',
+        2 => 'Cek stok tools marketing kampus',
+        3 => 'Cek kondisi ruangan sekretariat',
+        4 => 'Cek cara followup dan progres marketing lainnya',
+        5 => 'Korwil buat konten medsos dan kolaborasikan dengan medsos kampus',
+        6 => 'Cek report kasbonan',
+        7 => 'Cek BDC unit',
+        8 => 'Koordinasi dengan pejabat kampus',
+        9 => 'Cek pencapaian dan herregistrasi per prodi',
+    ];
+}
+
+function rsm_coordinator_schedule_checklist_state(array $row): array
+{
+    $saved = json_decode((string) ($row['checklist_json'] ?? ''), true);
+    $saved = is_array($saved) ? $saved : [];
+    $state = [];
+    foreach (array_keys(rsm_coordinator_visit_jobdesk_items()) as $itemKey) {
+        $entry = $saved[$itemKey] ?? null;
+        if (is_array($entry)) {
+            $state[$itemKey] = [
+                'checked' => !empty($entry['checked']),
+                'note' => trim((string) ($entry['note'] ?? '')),
+            ];
+        } else {
+            $state[$itemKey] = [
+                'checked' => !empty($entry),
+                'note' => '',
+            ];
+        }
+    }
+
+    return $state;
+}
+
+function rsm_coordinator_checklist_summary(array $rows): array
+{
+    $items = rsm_coordinator_visit_jobdesk_items();
+    $totals = array_fill_keys(array_keys($items), 0);
+    $checked = array_fill_keys(array_keys($items), 0);
+    $considered = 0;
+    foreach ($rows as $row) {
+        if ((string) ($row['status'] ?? '') !== 'Selesai' || empty($row['checklist_json'])) {
+            continue;
+        }
+        $considered++;
+        $state = rsm_coordinator_schedule_checklist_state($row);
+        foreach ($state as $itemKey => $entry) {
+            $totals[$itemKey]++;
+            if (!empty($entry['checked'])) {
+                $checked[$itemKey]++;
+            }
+        }
+    }
+    $summary = [];
+    foreach ($items as $itemKey => $label) {
+        $total = $totals[$itemKey];
+        $done = $checked[$itemKey];
+        $summary[] = [
+            'key' => $itemKey,
+            'label' => $label,
+            'checked' => $done,
+            'total' => $total,
+            'percent' => $total > 0 ? (int) round($done / $total * 100) : 0,
+        ];
+    }
+    usort($summary, static fn (array $a, array $b): int => $a['percent'] <=> $b['percent']);
+
+    return ['considered' => $considered, 'items' => $summary];
+}
+
+function rsm_coordinator_schedule_whatsapp_text(string $area, string $month): string
+{
+    $today = date('Y-m-d');
+    $days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+    $todayLabel = $days[(int) date('w')] . ', ' . date('d/m/Y');
+    $data = rsm_coordinator_schedules($area, ['month' => date('Y-m')], null);
+    $profiles = rsm_coordinator_profiles();
+    $grouped = (array) ($data['grouped'] ?? []);
+
+    $lines = [];
+    $lines[] = '*LAPORAN KUNJUNGAN KOORDINATOR WILAYAH*';
+    $lines[] = $area . ' - ' . $todayLabel;
+    $lines[] = '';
+
+    foreach (rsm_area_regionals($area) as $regional) {
+        $rows = (array) ($grouped[$regional] ?? []);
+        $todayRows = array_values(array_filter($rows, static fn (array $r): bool => (string) ($r['schedule_date'] ?? '') === $today));
+        $profile = $profiles[$regional] ?? ['name' => '-', 'home' => '-'];
+        $lines[] = '*' . $regional . ' - ' . (string) $profile['name'] . '*';
+        $doneRows = array_values(array_filter($todayRows, static fn (array $r): bool => (string) ($r['status'] ?? '') === 'Selesai'));
+        if ($doneRows === []) {
+            $lines[] = '- Belum ada laporan kunjungan hari ini.';
+        } else {
+            foreach ($doneRows as $row) {
+                $result = trim((string) ($row['result_text'] ?? ''));
+                $resultLabel = $result !== '' ? $result : 'Belum ada catatan hasil.';
+                if (mb_strlen($resultLabel) > 140) {
+                    $resultLabel = mb_substr($resultLabel, 0, 140) . '...';
+                }
+                $lines[] = '- ' . (string) $row['unit_name'] . ': ' . $resultLabel;
+                if (empty($row['checklist_json'])) {
+                    $lines[] = '  Checklist: belum diisi';
+                } else {
+                    $checklistState = rsm_coordinator_schedule_checklist_state($row);
+                    $lines[] = '  Checklist:';
+                    foreach (rsm_coordinator_visit_jobdesk_items() as $itemKey => $itemLabel) {
+                        $entry = $checklistState[$itemKey] ?? ['checked' => false, 'note' => ''];
+                        $itemStatus = !empty($entry['checked']) ? 'Lengkap' : 'Belum Lengkap';
+                        $itemNote = trim((string) ($entry['note'] ?? ''));
+                        $itemLine = '  ' . $itemKey . '. ' . $itemLabel . ' - ' . $itemStatus;
+                        if ($itemNote !== '') {
+                            $itemLine .= ' (catatan: ' . $itemNote . ')';
+                        }
+                        $lines[] = $itemLine;
+                    }
+                }
+            }
+        }
+        $lines[] = '';
+    }
+
+    $lines[] = '_Digenerate otomatis dari RSM Dashboard, ' . rsm_wib_datetime_label() . '_';
+
+    return implode("\n", $lines);
+}
+
+function rsm_coordinator_whatsapp_cache_path(): string
+{
+    return __DIR__ . '/runtime/cache/coordinator_whatsapp_latest.json';
+}
+
+function rsm_save_coordinator_whatsapp_artifact(string $text, string $month): array
+{
+    $artifact = ['text' => $text, 'month' => $month, 'generated_at' => rsm_wib_timestamp()];
+    $path = rsm_coordinator_whatsapp_cache_path();
+    $dir = dirname($path);
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+    file_put_contents($path, json_encode($artifact, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX);
+
+    return $artifact;
+}
+
+function rsm_latest_coordinator_whatsapp_artifact(): ?array
+{
+    $path = rsm_coordinator_whatsapp_cache_path();
+    if (!is_file($path)) {
+        return null;
+    }
+    $decoded = json_decode((string) file_get_contents($path), true);
+
+    return is_array($decoded) ? $decoded : null;
+}
+
 function rsm_report_coordinator_schedule(string $area, array $actor): void
 {
     if (!rsm_can_manage_coordinator_schedule($actor)) {
@@ -3146,10 +3348,22 @@ function rsm_report_coordinator_schedule(string $area, array $actor): void
         throw new RuntimeException('Jadwal tidak ditemukan atau berada di luar scope Anda.');
     }
     $attachmentPath = rsm_schedule_attachment_upload($id);
+    $checklist = [];
+    foreach (array_keys(rsm_coordinator_visit_jobdesk_items()) as $itemKey) {
+        $note = rsm_input('checklist_note_' . $itemKey);
+        if (mb_strlen($note) > 200) {
+            $note = mb_substr($note, 0, 200);
+        }
+        $checklist[$itemKey] = [
+            'checked' => rsm_input('checklist_' . $itemKey) === '1',
+            'note' => $note,
+        ];
+    }
     $data = [
         'status' => $status,
         'result_text' => rsm_input('result_text'),
         'next_action' => rsm_input('next_action'),
+        'checklist_json' => json_encode($checklist, JSON_UNESCAPED_UNICODE),
     ];
     if ($attachmentPath !== null) {
         $data['attachment_path'] = $attachmentPath;
@@ -3166,6 +3380,9 @@ function rsm_delete_coordinator_schedule(string $area, array $actor): void
 {
     if (!rsm_can_manage_coordinator_schedule($actor)) {
         throw new RuntimeException('Anda tidak memiliki akses menghapus jadwal koordinator.');
+    }
+    if ((string) ($actor['role'] ?? '') === 'koordinator') {
+        throw new RuntimeException('Koordinator tidak memiliki akses menghapus jadwal.');
     }
     $id = (int) rsm_input('schedule_id');
     [$scopeSql, $scopeParams] = rsm_schedule_scope_sql($actor, 's');
@@ -3253,14 +3470,38 @@ function rsm_coordinator_schedules(string $area, array $filters, ?array $user = 
     );
     $stmt->execute(array_merge($params, $scopeParams));
     $rows = $stmt->fetchAll();
+    $liburMap = rsm_jadwal_koordinator_libur_map();
+    $liburMonth = (string) ($liburMap['month'] ?? '');
+    $liburCoordinators = (array) ($liburMap['coordinators'] ?? []);
     $grouped = [];
     $summary = [];
+    foreach ($rows as &$row) {
+        $row['libur_code'] = null;
+        if ($liburMonth === '' || $liburMonth !== $month) {
+            continue;
+        }
+        $scheduleDay = (int) date('j', strtotime((string) $row['schedule_date']));
+        $koordinatorName = (string) ($row['koordinator_name'] ?? '');
+        $code = $liburCoordinators[$koordinatorName][$scheduleDay] ?? null;
+        if ($code === null) {
+            continue;
+        }
+        $row['libur_code'] = $code;
+        $row['unit_name'] = $code;
+        $row['agenda'] = '';
+        $row['visit_type'] = '';
+    }
+    unset($row);
     foreach ($rows as $row) {
         $regional = (string) ($row['wilayah'] ?? 'Tanpa Regional');
         $grouped[$regional][] = $row;
-        $summary[$regional] ??= ['total' => 0, 'Fisik' => 0, 'Zoom' => 0, 'Telepon' => 0, 'Selesai' => 0];
+        $summary[$regional] ??= ['total' => 0, 'Fisik' => 0, 'Zoom' => 0, 'Telepon' => 0, 'Selesai' => 0, 'Libur' => 0];
         $summary[$regional]['total']++;
-        $summary[$regional][(string) ($row['visit_type'] ?? 'Zoom')] = ($summary[$regional][(string) ($row['visit_type'] ?? 'Zoom')] ?? 0) + 1;
+        if (!empty($row['libur_code'])) {
+            $summary[$regional]['Libur']++;
+        } else {
+            $summary[$regional][(string) ($row['visit_type'] ?? 'Zoom')] = ($summary[$regional][(string) ($row['visit_type'] ?? 'Zoom')] ?? 0) + 1;
+        }
         if (($row['status'] ?? '') === 'Selesai') {
             $summary[$regional]['Selesai']++;
         }
@@ -3293,9 +3534,31 @@ function rsm_handle_post(string $area, string $role): ?string
         $count = count($sync['reports'] ?? []);
         return $count > 0 ? 'Data pencapaian berhasil disinkronkan.' : 'Sinkronisasi gagal, cache lama tetap digunakan.';
     }
-    if ($action === 'generate_whatsapp_achievement') {
+    if ($action === 'sync_jadwal_cache') {
         if (!rsm_can_sync_collab(rsm_admin_actor())) {
-            throw new RuntimeException('Hanya Senior Manager atau Mentor yang bisa generate bahan WhatsApp.');
+            throw new RuntimeException('Hanya Senior Manager atau Mentor yang bisa sinkronisasi jadwal.');
+        }
+        $sync = rsm_jadwal_sync_cache();
+        $count = count($sync['zonas'] ?? []);
+
+        return $count > 0 ? 'Jadwal berhasil disinkronkan.' : 'Sinkronisasi jadwal gagal, cache lama tetap digunakan.';
+    }
+    if ($action === 'generate_coordinator_whatsapp_report') {
+        if ((string) ($actor['role'] ?? '') !== 'super_user') {
+            throw new RuntimeException('Hanya Super User yang bisa generate laporan WhatsApp kunjungan.');
+        }
+        $month = rsm_input('schedule_month', date('Y-m'));
+        if (!preg_match('/^\d{4}-\d{2}$/', $month)) {
+            $month = date('Y-m');
+        }
+        $text = rsm_coordinator_schedule_whatsapp_text($area, $month);
+        $GLOBALS['rsm_coordinator_whatsapp_artifact'] = rsm_save_coordinator_whatsapp_artifact($text, $month);
+
+        return 'Laporan WhatsApp kunjungan koordinator berhasil dibuat.';
+    }
+    if ($action === 'generate_whatsapp_achievement') {
+        if ((string) (rsm_admin_actor()['role'] ?? '') !== 'super_user') {
+            throw new RuntimeException('Hanya Super User yang bisa generate bahan WhatsApp.');
         }
         try {
             rsm_collab_sync_cache();
@@ -3582,6 +3845,30 @@ function rsm_reports(string $area, ?string $type = null, int $limit = 50, ?array
     $stmt = rsm_pdo()->prepare($sql);
     $stmt->execute($params);
     return $stmt->fetchAll();
+}
+
+function rsm_ads_pending_reports(string $area, ?array $user = null, int $limit = 100): array
+{
+    $sql = "SELECT * FROM rsm_reports r
+            WHERE r.area = ?
+              AND r.report_type = 'ads'
+              AND (
+                LOWER(r.status) NOT IN ('dilaporkan unit', 'ditolak')
+                OR (LOWER(r.status) = 'dilaporkan unit' AND (r.realization_amount <= 0 OR r.attachment_path IS NULL OR r.attachment_path = ''))
+              )";
+    $params = [$area];
+    [$scopeSql, $scopeParams] = rsm_report_scope_sql($user, 'r');
+    $sql .= $scopeSql . ' ORDER BY r.report_date DESC, r.id DESC LIMIT ' . max(1, min(500, $limit));
+    $params = array_merge($params, $scopeParams);
+    $stmt = rsm_pdo()->prepare($sql);
+    $stmt->execute($params);
+    $rows = $stmt->fetchAll();
+    foreach ($rows as &$row) {
+        $row['pending_reason'] = strtolower(trim((string) ($row['status'] ?? ''))) === 'dilaporkan unit' ? 'belum_tuntas' : 'belum_dilaporkan';
+    }
+    unset($row);
+
+    return $rows;
 }
 
 function rsm_rekap_reports(string $area, array $filters, ?string $type = null, int $limit = 200, ?array $user = null): array
@@ -4075,7 +4362,7 @@ function rsm_dashboard_filter_sql(array $filters, string $alias = 'r'): array
         $sql .= " AND {$prefix}report_date <= ?";
         $params[] = (string) $filters['date_to'];
     }
-    foreach (['wilayah', 'unit_name', 'staff_name', 'platform', 'status'] as $field) {
+    foreach (['wilayah', 'unit_name', 'staff_name', 'platform', 'status', 'ad_period'] as $field) {
         if (($filters[$field] ?? '') !== '') {
             if ($field === 'unit_name') {
                 $variants = rsm_campus_alias_variants((string) $filters[$field]);
@@ -4085,12 +4372,43 @@ function rsm_dashboard_filter_sql(array $filters, string $alias = 'r'): array
                 }
                 continue;
             }
+            if ($field === 'ad_period') {
+                $bounds = rsm_ad_period_bounds((string) $filters[$field]);
+                if ($bounds !== null) {
+                    $sql .= " AND ({$prefix}ad_period = ? OR (({$prefix}ad_period IS NULL OR {$prefix}ad_period = '') AND {$prefix}report_date BETWEEN ? AND ?))";
+                    $params[] = (string) $filters[$field];
+                    $params[] = $bounds[0];
+                    $params[] = $bounds[1];
+                    continue;
+                }
+            }
             $sql .= " AND {$prefix}{$field} = ?";
             $params[] = (string) $filters[$field];
         }
     }
 
     return [$sql, $params];
+}
+
+function rsm_ad_period_bounds(string $period): ?array
+{
+    $monthNumbers = [
+        'januari' => 1, 'februari' => 2, 'maret' => 3, 'april' => 4,
+        'mei' => 5, 'juni' => 6, 'juli' => 7, 'agustus' => 8,
+        'september' => 9, 'oktober' => 10, 'november' => 11, 'desember' => 12,
+    ];
+    if (!preg_match('/^([a-zA-Z]+)\s+(\d{4})$/', trim($period), $matches)) {
+        return null;
+    }
+    $month = $monthNumbers[strtolower($matches[1])] ?? null;
+    if ($month === null) {
+        return null;
+    }
+    $year = (int) $matches[2];
+    $start = sprintf('%04d-%02d-01', $year, $month);
+    $end = date('Y-m-t', strtotime($start));
+
+    return [$start, $end];
 }
 
 function rsm_dashboard_percent(float $part, float $whole): float
@@ -4744,6 +5062,7 @@ function rsm_collab_ingest_daily_metrics(string $reportName, array $report): voi
     }
 
     $isCampus = in_array($reportName, ['Closing Kampus Regional', 'Herreg Kampus Regional'], true);
+    $isPersonalRegional = $reportName === 'Closing Personal Per Regional';
     $valueBase = $isCampus ? 4 : 5;
 
     $dayValueIndexes = [];
@@ -4753,7 +5072,7 @@ function rsm_collab_ingest_daily_metrics(string $reportName, array $report): voi
         if (!preg_match('/^\d{1,2}$/', $dayLabel)) {
             continue;
         }
-        $dayValueIndexes[(int) $dayLabel] = $valueBase + $offset;
+        $dayValueIndexes[(int) $dayLabel] = $isPersonalRegional ? $headerIndex : $valueBase + $offset;
         $offset++;
     }
     if ($dayValueIndexes === []) {
@@ -4772,6 +5091,7 @@ function rsm_collab_ingest_daily_metrics(string $reportName, array $report): voi
 
     $pdo->beginTransaction();
     try {
+        $currentRegional = null;
         foreach ($rows as $index => $row) {
             if ($index < (int) ($layout['data_start_index'] ?? 0) || !is_array($row)) {
                 continue;
@@ -4790,6 +5110,36 @@ function rsm_collab_ingest_daily_metrics(string $reportName, array $report): voi
                 $entityKey = mb_strtolower($regional . '|' . $campusName);
                 $staffNik = null;
                 $staffName = null;
+            } elseif ($isPersonalRegional) {
+                $label = trim((string) ($row[0] ?? ''));
+                if ($label === '') {
+                    continue;
+                }
+                if (preg_match('/\(Korwil Regional\s*([1-7])\)\s*$/i', $label, $korwilMatch)) {
+                    $currentRegional = 'Regional ' . $korwilMatch[1];
+                }
+                if (preg_match('/^(Sub\.?\s*Total|Total\s|Grand\.?\s*Total)/i', $label)) {
+                    if (preg_match('/\(Korwil Regional\s*[1-7]?\)/i', $label)) {
+                        $currentRegional = null;
+                    }
+                    continue;
+                }
+                if ($currentRegional === null) {
+                    continue;
+                }
+                $clean = trim((string) preg_replace('/\s*\(Korwil Regional[^)]*\)\s*$/i', '', $label));
+                $staffNik = null;
+                $staffName = $clean;
+                if (preg_match('/^([A-Za-z]{1,4}[.\d-]+)\s*-\s*(.+)$/', $clean, $nameMatch)) {
+                    $staffNik = trim($nameMatch[1]);
+                    $staffName = trim($nameMatch[2]);
+                }
+                if ($staffName === '') {
+                    continue;
+                }
+                $regional = $currentRegional;
+                $entityKey = rsm_username_from_nik_or_name($staffNik, $staffName);
+                $campusName = null;
             } else {
                 $regionalDigit = trim((string) ($row[(int) $layout['regional_index']] ?? ''));
                 $staffNik = trim((string) ($row[(int) $layout['staff_nik_index']] ?? ''));
@@ -4860,7 +5210,7 @@ function rsm_collab_sync_cache(): array
         $report['cached_at'] = $result['synced_at'];
         $result['reports'][$reportName] = $report;
         rsm_collab_archive_report($reportName, $report);
-        if (in_array($reportName, ['Closing Collab', 'Herreg Collab', 'Closing Kampus Regional', 'Herreg Kampus Regional'], true)) {
+        if (in_array($reportName, ['Closing Collab', 'Herreg Collab', 'Closing Kampus Regional', 'Herreg Kampus Regional', 'Closing Personal Per Regional'], true)) {
             rsm_collab_ingest_daily_metrics($reportName, $report);
         }
     }
@@ -4883,6 +5233,175 @@ function rsm_collab_sync_cache(): array
     }
     rsm_collab_cache_write($result);
     return $result;
+}
+
+function rsm_jadwal_source_url(int $zona): string
+{
+    return 'https://cb.web.id/media.php?p=jadwal&zona=' . $zona;
+}
+
+function rsm_jadwal_cache_path(): string
+{
+    return __DIR__ . '/runtime/cache/jadwal_koordinator_cb.json';
+}
+
+function rsm_jadwal_cache_read(): array
+{
+    $path = rsm_jadwal_cache_path();
+    if (!is_file($path)) {
+        return [];
+    }
+    $decoded = json_decode((string) file_get_contents($path), true);
+
+    return is_array($decoded) ? $decoded : [];
+}
+
+function rsm_jadwal_cache_write(array $payload): void
+{
+    $path = rsm_jadwal_cache_path();
+    $dir = dirname($path);
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+    file_put_contents($path, json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
+}
+
+function rsm_jadwal_extract_table_html(string $html, string $tableId): string
+{
+    if (preg_match('/<table[^>]*id="' . preg_quote($tableId, '/') . '"[^>]*>(.*?)<\/table>/is', $html, $m)) {
+        $inner = preg_replace('/<script\b[^>]*>.*?<\/script>/is', '', $m[1]) ?? $m[1];
+        $inner = preg_replace('/\son\w+\s*=\s*"[^"]*"/i', '', $inner) ?? $inner;
+        $inner = preg_replace("/\son\w+\s*=\s*'[^']*'/i", '', $inner) ?? $inner;
+
+        return '<table class="collab-raw-table">' . $inner . '</table>';
+    }
+
+    return '';
+}
+
+function rsm_jadwal_fetch_zona(int $zona): array
+{
+    $url = rsm_jadwal_source_url($zona);
+    $html = rsm_collab_authenticated_html($url);
+    if (trim($html) === '') {
+        return ['zona' => $zona, 'source_url' => $url, 'error' => 'Source tidak terbaca (login/koneksi gagal).'];
+    }
+    $tableHtml = rsm_jadwal_extract_table_html($html, 'tb_jadwal');
+    if ($tableHtml === '') {
+        return ['zona' => $zona, 'source_url' => $url, 'error' => 'Tabel jadwal tidak ditemukan pada halaman sumber.'];
+    }
+
+    return [
+        'zona' => $zona,
+        'source_url' => $url,
+        'table_html' => $tableHtml,
+        'fetched_at' => rsm_wib_timestamp(),
+    ];
+}
+
+function rsm_jadwal_sync_cache(): array
+{
+    $result = ['synced_at' => rsm_wib_timestamp(), 'zonas' => [], 'errors' => []];
+    foreach ([2] as $zona) {
+        $data = rsm_jadwal_fetch_zona($zona);
+        if (!empty($data['error'])) {
+            $result['errors'][$zona] = (string) $data['error'];
+            continue;
+        }
+        $result['zonas'][$zona] = $data;
+    }
+
+    $existing = rsm_jadwal_cache_read();
+    if ($result['zonas'] === []) {
+        if ($existing !== []) {
+            $existing['last_sync_error_at'] = $result['synced_at'];
+            $existing['last_sync_errors'] = $result['errors'];
+            rsm_jadwal_cache_write($existing);
+        }
+
+        return $result;
+    }
+
+    foreach ((array) ($existing['zonas'] ?? []) as $zona => $data) {
+        if (!isset($result['zonas'][$zona]) && is_array($data)) {
+            $result['zonas'][$zona] = $data;
+        }
+    }
+    rsm_jadwal_cache_write($result);
+
+    return $result;
+}
+
+function rsm_jadwal_cache_snapshot(): array
+{
+    return rsm_jadwal_cache_read();
+}
+
+function rsm_jadwal_koordinator_name_map(): array
+{
+    return [
+        'Hamaruddin' => 'Hamaruddin',
+        'Kundi Harto' => 'Kundi Harto',
+        'M. Nor Abidin' => 'Moh Nor Abidin',
+        'Nugroho Budi Santoso' => 'Nugroho Budi Santoso',
+    ];
+}
+
+function rsm_jadwal_parse_zona_rows(string $tableHtml): array
+{
+    if (!preg_match_all('/<tr\b[^>]*>(.*?)<\/tr>/is', $tableHtml, $trMatches)) {
+        return [];
+    }
+    $rows = [];
+    foreach ($trMatches[1] as $trInner) {
+        if (!preg_match_all('/<td\b[^>]*>(.*?)<\/td>/is', $trInner, $tdMatches)) {
+            continue;
+        }
+        $cells = array_map(
+            static fn (string $cell): string => trim((string) preg_replace('/\s+/', ' ', strip_tags($cell))),
+            $tdMatches[1]
+        );
+        if (count($cells) < 36 || !preg_match('/^SG\./i', $cells[0])) {
+            continue;
+        }
+        $days = [];
+        for ($day = 1; $day <= 31; $day++) {
+            $days[$day] = $cells[4 + $day] ?? '';
+        }
+        $rows[] = ['nik' => $cells[0], 'nama' => $cells[1], 'days' => $days];
+    }
+
+    return $rows;
+}
+
+function rsm_jadwal_koordinator_libur_map(): array
+{
+    $snapshot = rsm_jadwal_cache_snapshot();
+    $tableHtml = (string) ($snapshot['zonas'][2]['table_html'] ?? '');
+    $fetchedAt = (string) ($snapshot['zonas'][2]['fetched_at'] ?? '');
+    if ($tableHtml === '' || $fetchedAt === '') {
+        return ['month' => '', 'coordinators' => []];
+    }
+    $parsedRows = rsm_jadwal_parse_zona_rows($tableHtml);
+    $coordinators = [];
+    foreach (rsm_jadwal_koordinator_name_map() as $localName => $cbName) {
+        foreach ($parsedRows as $parsedRow) {
+            if (mb_strtolower(trim((string) $parsedRow['nama'])) !== mb_strtolower(trim($cbName))) {
+                continue;
+            }
+            $liburDays = [];
+            foreach ((array) $parsedRow['days'] as $day => $code) {
+                $codeNorm = strtoupper(trim((string) $code));
+                if ($codeNorm === 'L' || $codeNorm === 'LN') {
+                    $liburDays[(int) $day] = $codeNorm;
+                }
+            }
+            $coordinators[$localName] = $liburDays;
+            break;
+        }
+    }
+
+    return ['month' => substr($fetchedAt, 0, 7), 'coordinators' => $coordinators];
 }
 
 function rsm_sync_health_status(): array

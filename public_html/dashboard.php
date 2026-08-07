@@ -2486,7 +2486,7 @@ function render_edit_input(string $field, string $name, array $report, array $op
     } elseif ($field === 'Wilayah') {
         ?><select name="<?= h($name) ?>" required><?php foreach ($references['regionals'] as $regionalOption): ?><option value="<?= h((string) $regionalOption) ?>"<?= $value === (string) $regionalOption ? ' selected' : '' ?>><?= h((string) $regionalOption) ?></option><?php endforeach; ?></select><?php
     } elseif ($field === 'Unit/Kampus') {
-        ?><select name="<?= h($name) ?>" required><?php foreach ($references['campuses'] as $campusOption): $label = (string) $campusOption['label']; ?><option value="<?= h($label) ?>"<?= $value === $label ? ' selected' : '' ?>><?= h($label) ?></option><?php endforeach; ?></select><?php
+        ?><select name="<?= h($name) ?>" required><?php $campusLabels = array_map(static fn (array $c): string => (string) $c['label'], $references['campuses']); if ($value !== '' && !in_array($value, $campusLabels, true)): ?><option value="<?= h($value) ?>" selected><?= h($value) ?></option><?php endif; ?><?php foreach ($references['campuses'] as $campusOption): $label = (string) $campusOption['label']; ?><option value="<?= h($label) ?>"<?= $value === $label ? ' selected' : '' ?>><?= h($label) ?></option><?php endforeach; ?></select><?php
     } elseif ($field === 'Nama staff') {
         ?><select name="<?= h($name) ?>" required><?php foreach ($references['staff'] as $staffOption): $label = (string) $staffOption['name']; ?><option value="<?= h($label) ?>"<?= $value === $label ? ' selected' : '' ?>><?= h($label) ?> - <?= h((string) ($staffOption['regional'] ?? '-')) ?></option><?php endforeach; ?></select><?php
     } elseif ($name === 'ad_leads_file') {

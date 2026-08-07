@@ -49,6 +49,29 @@ if (!isset($pageTitles[$page])) {
     $page = 'dashboard';
 }
 
+$pageHeaders = [
+    'dashboard' => ['Ringkasan Regional', 'Pantau performa utama, aktivitas marketing, dan progres unit/kampus dalam satu tampilan.'],
+    'pencapaian' => ['Performa Tim', 'Lihat pencapaian setiap staff terhadap target dan periode yang dipilih.'],
+    'jadwal-koordinator' => ['Agenda Koordinator', 'Pantau jadwal, jobdesk, dan penyelesaian agenda koordinator wilayah.'],
+    'bdc-users' => ['Tim BDC', 'Kelola dan pantau data BDC Marketing di setiap unit/kampus.'],
+    'konten' => ['Konten Kampus', 'Pantau aktivitas dan konsistensi publikasi konten setiap kampus.'],
+    'kegiatan' => ['Aktivitas Marketing', 'Catat dan pantau pelaksanaan kegiatan marketing regional.'],
+    'anggaran' => ['Anggaran Iklan', 'Pantau plafon anggaran, realisasi biaya, dan hasil laporan iklan.'],
+    'aktivitas' => ['Aktivitas Pendukung', 'Catat aktivitas marketing lain di luar kegiatan dan laporan iklan.'],
+    'rekap' => ['Laporan Regional', 'Tinjau dan ekspor rangkuman laporan berdasarkan periode dan cakupan akses.'],
+    'role' => ['Akses Pengguna', 'Lihat pembagian role dan hak akses pengguna di dalam sistem.'],
+    'password' => ['Keamanan Akun', 'Perbarui kata sandi akun yang sedang digunakan.'],
+    'targets' => ['Pengaturan Target', 'Atur target bulanan sebagai acuan pencapaian staff dan kampus.'],
+    'users' => ['Administrasi Pengguna', 'Kelola akun, role, jabatan, wilayah, dan unit pengguna.'],
+    'sumber-collab' => ['Data Kolaborasi', 'Lihat sumber data kolaborasi yang digunakan untuk monitoring regional.'],
+    'jadwal-personalia' => ['Jadwal Personalia', 'Pantau jadwal personalia regional dan status sinkronisasi data terbaru.'],
+    'profile' => ['Akun Saya', 'Lihat identitas, statistik, pencapaian, dan progres akun Anda.'],
+    'detail' => ['Detail Laporan', 'Tinjau informasi lengkap dan status laporan yang dipilih.'],
+    'edit' => ['Perbarui Laporan', 'Ubah informasi laporan yang dipilih lalu simpan pembaruannya.'],
+    'closing-kampus' => ['Peringkat Kampus', 'Lihat lima kampus dengan pencapaian terbaik pada periode terpilih.'],
+];
+$pageHeader = $pageHeaders[$page] ?? [$area, 'Pantau aktivitas marketing dan performa unit/kampus.'];
+
 function h(string $value): string
 {
     return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
@@ -586,9 +609,9 @@ if ($page === 'rekap' && $dbError === null) {
     <main class="main">
       <header class="topbar">
         <div>
-          <p class="eyebrow"><?= h($area) ?></p>
+          <p class="eyebrow"><?= h($area) ?> · <?= h($pageHeader[0]) ?></p>
           <h1><?= h($pageTitles[$page]) ?></h1>
-          <p>Monitoring aktivitas marketing regional, Laporan iklan, dan performa unit/kampus.</p>
+          <p><?= h($pageHeader[1]) ?></p>
         </div>
         <div class="top-actions">
           <?php if (count($allowedRoleKeys) > 1): ?>
@@ -3041,6 +3064,24 @@ function rekap_export_rows(string $area, array $filters, string $type, array $re
 
     if ($type === 'ads') {
         $rows[] = ['Tanggal', 'Periode Iklan', 'Regional', 'Unit/Kampus', 'Platform', 'Campaign', 'Anggaran', 'Realisasi', 'Leads', 'Closing', 'CPL', 'Status'];
+        $grandTotals = ads_group_totals();
+        foreach ($reports as $row) {
+            ads_group_add($grandTotals, $row);
+        }
+        $rows[] = [
+            'TOTAL SELURUH REGIONAL',
+            '',
+            '',
+            (int) ($grandTotals['count'] ?? 0) . ' laporan',
+            '',
+            '',
+            (float) ($grandTotals['requested'] ?? 0),
+            (float) ($grandTotals['realization'] ?? 0),
+            (float) ($grandTotals['leads'] ?? 0),
+            (float) ($grandTotals['closing'] ?? 0),
+            rsm_dashboard_divide((float) ($grandTotals['realization'] ?? 0), (float) ($grandTotals['leads'] ?? 0)),
+            '',
+        ];
         foreach (ads_grouped_reports($reports) as $regionalGroup) {
             $regionalTotals = $regionalGroup['totals'] ?? [];
             $rows[] = [

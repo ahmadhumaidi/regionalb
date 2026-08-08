@@ -11,6 +11,13 @@ runtime/
 # Arsip deployment
 *.zip
 
+# Backup database lokal
+backups/
+
 # Dependency
 vendor/
 node_modules/
+
+# Config aktivitas lokal (berisi credential)
+source_activity/
+!source_activity/*.example.php

@@ -1950,15 +1950,24 @@ function rsm_create_report(string $area, string $role, string $type): int
         'follow_up_text' => rsm_input('follow_up_text'),
     ];
     if ($type === 'ads') {
-        if ($role !== 'koordinator') {
-            throw new RuntimeException('Laporan iklan diajukan oleh Koordinator Wilayah.');
+        if (!in_array($role, ['koordinator', 'super_user'], true)) {
+            throw new RuntimeException('Laporan iklan diajukan oleh Koordinator Wilayah atau Super User.');
         }
-        $data['status'] = 'Pengajuan';
         if (trim((string) $data['ad_period']) === '') {
             $data['ad_period'] = rsm_default_ad_period((string) $data['report_date']);
         }
-        $data['budget_approved'] = 0.0;
-        rsm_validate_ad_budget_request($area, $data);
+        if ($role === 'super_user') {
+            // Laporan pengeluaran Senior Manager: dibuat dan langsung disetujui oleh Super User
+            // sendiri, tidak terikat wilayah/kampus koordinator maupun plafon anggaran regional.
+            $data['wilayah'] = 'Regional B';
+            $data['unit_name'] = 'Regional B';
+            $data['status'] = 'Disetujui';
+            $data['budget_approved'] = $data['budget_requested'];
+        } else {
+            $data['status'] = 'Pengajuan';
+            $data['budget_approved'] = 0.0;
+            rsm_validate_ad_budget_request($area, $data);
+        }
     }
 
     $columns = array_keys($data);
@@ -3635,7 +3644,10 @@ function rsm_handle_post(string $area, string $role): ?string
     if ($action === 'create_ads') {
         $reportId = rsm_create_report($area, $role, 'ads');
         $importedRows = rsm_import_ad_leads($reportId, $area, $role);
-        return 'Laporan anggaran iklan berhasil dikirim. Hubungi Senior Manager untuk approval.' . ($importedRows > 0 ? " Data hasil iklan terimpor {$importedRows} baris." : '');
+        $message = $role === 'super_user'
+            ? 'Laporan pengeluaran Senior Manager berhasil disimpan dan langsung disetujui.'
+            : 'Laporan anggaran iklan berhasil dikirim. Hubungi Senior Manager untuk approval.';
+        return $message . ($importedRows > 0 ? " Data hasil iklan terimpor {$importedRows} baris." : '');
     }
     if ($action === 'create_other') {
         rsm_create_report($area, $role, 'other');

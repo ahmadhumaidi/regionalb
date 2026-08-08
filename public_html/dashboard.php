@@ -1223,6 +1223,10 @@ if ($page === 'rekap' && $dbError === null) {
         <?php render_form_panel('Pengajuan Iklan', [
             'Tanggal', 'Periode Iklan', 'Wilayah', 'Unit/Kampus', 'Platform iklan', 'Anggaran diajukan'
         ], ['Meta Ads', 'IG', 'FB', 'Google Ads', 'TikTok Ads', 'WhatsApp Blast', 'Marketplace/Portal', 'Lainnya'], ['Pengajuan'], 'create_ads', $references, $authUser); ?>
+        <?php elseif ($role === 'super_user'): ?>
+        <?php render_form_panel('Tambah Pengeluaran Senior Manager', [
+            'Tanggal', 'Periode Iklan', 'Platform iklan', 'Nama campaign', 'Anggaran diajukan'
+        ], ['Meta Ads', 'IG', 'FB', 'Google Ads', 'TikTok Ads', 'WhatsApp Blast', 'Marketplace/Portal', 'Operasional', 'Lainnya'], ['Disetujui'], 'create_ads', $references, $authUser); ?>
         <?php endif; ?>
         <section class="panel">
           <div class="panel-head"><h2>Anggaran & Laporan Iklan</h2><?php if ($role === 'koordinator'): ?><button class="primary-btn">Tambah Iklan</button><?php endif; ?></div>
@@ -2425,7 +2429,7 @@ function render_form_panel(string $title, array $fields, array $options, array $
         <?php endforeach; ?>
         <label><span>Status</span><select name="status"><?php foreach ($statuses as $status): ?><option><?= h($status) ?></option><?php endforeach; ?></select></label>
         <?php if ($action === 'create_ads'): ?>
-          <div class="form-actions"><button class="primary-btn">Ajukan Iklan</button></div>
+          <div class="form-actions"><button class="primary-btn"><?= (($authUser['role'] ?? '') === 'super_user') ? 'Simpan Pengeluaran' : 'Ajukan Iklan' ?></button></div>
         <?php else: ?>
           <div class="form-actions"><button class="secondary-btn" name="status" value="Draft">Simpan Draft</button><button class="primary-btn">Kirim Laporan</button></div>
         <?php endif; ?>
